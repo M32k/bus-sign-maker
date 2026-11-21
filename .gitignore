@@ -9,3 +9,4 @@ icon.icns
 .icon.iconset/
 .dmg_stage/
 .DS_Store
+.venv/

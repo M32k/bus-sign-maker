@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.0 (2026-11-19)"
+APP_VERSION = "2.1 (2026-11-22)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -692,15 +692,15 @@ _NUM_SS = 8
 _num_em_cache = {}
 
 
-def _num_em(path, target_h):
-    """숫자 잉크 높이가 target_h가 되는 글꼴 크기"""
-    key = (path, target_h)
+def _num_em(path, target_h, ref="0123456789"):
+    """기준 글자(ref)의 잉크 높이가 target_h가 되는 글꼴 크기"""
+    key = (path, target_h, ref)
     if key not in _num_em_cache:
         best = None
         for em10 in range(int(target_h * 10), int(target_h * 20)):
             em = em10 / 10
             f = get_font(path, int(round(em * _NUM_SS)))
-            l, t, r, bt = f.getbbox("0123456789", anchor="ls")
+            l, t, r, bt = f.getbbox(ref, anchor="ls")
             hh = round((bt - t) / _NUM_SS)
             if hh == target_h:
                 best = em
@@ -750,10 +750,24 @@ def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1):
     f = get_font(path, int(round(em * _NUM_SS)))
     asc, desc = f.getmetrics()
     _, rt, _, rb = f.getbbox("0123456789", anchor="ls")
+    # 번호에 한글이 섞이면(심야1, 사하10) 번호 글꼴에 한글이 없으므로 나눔고딕 Bold로 같은 높이에 맞춰 그림
+    kpath = str(BUNDLED_BOLD) if BUNDLED_BOLD.exists() else text_font()
+    kem = _num_em(kpath, target_h, "가힣한") if any(ord(c) > 127 for c in text) else None
     cols = []
     for ch in text:
         if ch == " ":
             cols.append(None); continue
+        if ord(ch) > 127 and kem:
+            fk = get_font(kpath, int(round(kem * _NUM_SS)))
+            ka, kd = fk.getmetrics()
+            _, kt, _, kb = fk.getbbox("가힣한", anchor="ls")
+            adv = fk.getlength(ch)
+            big = Image.new("L", (int(adv + kem * _NUM_SS), ka + kd), 0)
+            ImageDraw.Draw(big).text((0, ka), ch, font=fk, fill=255, anchor="ls")
+            big = big.crop((0, ka + kt, big.width, ka + kb))
+            sm = big.resize((max(1, round(big.width * kx / _NUM_SS)), target_h), Image.BOX)
+            cols.append((np.asarray(sm) > th, round(adv * kx / _NUM_SS)))
+            continue
         adv = f.getlength(ch)
         ov = glyph_override("NUM", target_h, ch)
         if ov is not None and ov.shape[0] == target_h:
@@ -888,8 +902,14 @@ def tpl_jinmyeong_front(r, st):
             one = render_mono([(text, color)], h, fw, hw, 10 ** 4)
             if one.width <= bw:
                 put([one], box, [y + 9]); return
-        a, b2 = split_two(text)
         h, fw, hw = SPEC_KO_TWO if korean else SPEC_EN_TWO
+        if " " not in text:
+            # 띄어쓰기 없는 이름: 작은 글씨 한 줄에 들어가면 한 줄(부산역), 영문은 단어를 자르지 않고 한 줄로 누름
+            one = render_mono([(text, color)], h, fw, hw, 10 ** 4)
+            if one.width <= bw or not korean:
+                put([render_mono([(text, color)], h, fw, hw, bw)], box, [y + (32 - h) // 2])
+                return
+        a, b2 = split_two(text)
         put([render_mono([(a, color)], h, fw, hw, bw), render_mono([(b2, color)], h, fw, hw, bw)], box, [y + 2, y + 17])
 
     def od_band(y, start, end, korean):
@@ -1129,6 +1149,12 @@ def render_json_page(tpl, page, route, st):
                 img.alpha_composite(one, (x + (bw - one.width) // 2, y + (bh - h1) // 2))
             else:
                 h2, f2, s2 = SPECS.get(el.get("two"), SPEC_KO_TWO)
+                if " " not in text:
+                    small = render_mono([(text, color)], h2, f2, s2, 10 ** 4)
+                    if small.width <= bw or not has_hangul(text):
+                        li = render_mono([(text, color)], h2, f2, s2, bw)
+                        img.alpha_composite(li, (x + (bw - li.width) // 2, y + (bh - h2) // 2))
+                        continue
                 a, b2 = split_two(text)
                 gap = max(1, (bh - 2 * h2) // 3)
                 for i, part in enumerate((a, b2)):
@@ -1430,19 +1456,67 @@ XL_COLS = [("no", "번호"), ("start_ko", "기점(한)"), ("end_ko", "종점(한
            ("template", "템플릿"), ("kind", "구분")]
 
 
+SAMPLE_ROUTES = [
+    # (번호, 기점한, 종점한, 기점영, 종점영, 경유지, 템플릿, 구분, 설명)
+    ("360", "서울역 환승센터", "강일IC", "Seoul Station", "Gang-il IC",
+     "동묘앞,을지로4가\n강동역,십자성마을\nDongmyo,Euljiro 4-ga\nGangdong Stn,Sipjaseong Village",
+     "jinmyeong_front_192x160", "일반", "기본 예시 (원본 화면과 같은 노선)"),
+    ("1100", "부산역", "하단역", "Busan Station", "Hadan Stn",
+     "남포동,자갈치\nNampodong,Jagalchi", "jinmyeong_front_192x160", "일반", "경유지 한 줄씩"),
+    ("1003", "사하구청", "해운대해수욕장", "", "",
+     "괴정역,대티역,서면\n부전역,연산역", "jinmyeong_front_192x160", "급행",
+     "영문 칸이 비어 있음 → [모든 노선 채우기]로 자동 변환해 보세요. 급행은 번호가 빨간 상자로 반전"),
+    ("58-1", "괴정", "다대포해수욕장", "Goejeong", "Dadaepo Beach",
+     "", "jinmyeong_front_192x160", "좌석", "경유지 없음, 좌석은 번호가 빨강"),
+    ("심야1", "부산역", "해운대", "Busan Station", "Haeundae",
+     "서면,연산역", "jinmyeong_front_192x160", "심야", "심야는 하늘색 반전 · 번호에 한글"),
+    ("사하10", "괴정역", "감천문화마을", "Goejeong Stn", "Gamcheon Culture Village",
+     "", "side_160x32 (측면, 한/영 2장)", "마을", "측면판: 한글/영문 2장으로 저장 (_1, _2)"),
+    ("86", "기장", "부산대학교", "Gijang", "Pusan National Univ.",
+     "송정,반여농산물시장,동래역,부산대역\nSongjeong,Banyeo Mkt,Dongnae,PNU Stn",
+     "jinmyeong_front_192x160", "일반", "일부러 긴 경유지 → 압축 경고가 뜨는 예"),
+    ("1004", "", "", "", "", "", "rear_64x32 (후면 번호)", "일반", "후면 번호판 64x32"),
+    ("1001", "신평", "송정", "Sinpyeong", "Songjeong",
+     "", "front_192x32 (전면 한 줄, 한/영 2장)", "순환", "전면 한 줄판 192x32, 순환은 주황"),
+]
+
+
 def make_sample_excel(path):
     from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
     wb = Workbook()
     ws = wb.active
     ws.title = "노선"
-    ws.append([c[1] for c in XL_COLS])
-    ws.append(["360", "서울역 환승센터", "강일IC", "Seoul Station", "Gang-il IC",
-               "동묘앞,을지로4가,\n강동역,십자성마을\nDongmyo,Euljuro-4ga,\nGangdong Stn,10JASUNG TOWN",
-               "jinmyeong_front_192x160"])
-    ws.append(["1100", "부산역", "하단역", "Busan Stn", "Hadan Stn",
-               "남포동,자갈치\nNampo-dong,Jagalchi", "jinmyeong_front_192x160"])
-    for c, w in zip("ABCDEFG", (8, 18, 14, 16, 14, 50, 26)):
+    ws.append([c[1] for c in XL_COLS] + ["설명(읽지 않음)"])
+    for row in SAMPLE_ROUTES:
+        ws.append(list(row))
+    head = PatternFill("solid", fgColor="FFE699")
+    for c in ws[1]:
+        c.font = Font(bold=True)
+        c.fill = head
+    for row in ws.iter_rows(min_row=2):
+        for c in row:
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+    for c, w in zip("ABCDEFGHI", (8, 16, 16, 16, 22, 46, 30, 7, 44)):
         ws.column_dimensions[c].width = w
+    ws.freeze_panes = "B2"
+    g = wb.create_sheet("사용법")
+    for line in [
+        ["노선이미지 생성기 엑셀 형식"],
+        [""],
+        ["· 첫 번째 시트(노선)의 첫 줄은 제목 줄입니다. 열 순서는 바뀌어도 되고, 제목 글자만 맞으면 됩니다."],
+        ["· 번호: 행선판에 나올 노선 번호 (숫자·하이픈은 원본형 번호 글꼴, 한글이 섞이면 일반 글꼴)"],
+        ["· 기점/종점(한·영): 공백이 있으면 두 줄로 나뉘고, 짧으면 한 줄로 크게 나옵니다."],
+        ["· 경유지: 쉼표 = 정류장, 줄바꿈(Alt+Enter / 맥은 ⌃⌥Enter) = 줄. 한글 줄 다음에 영문 줄."],
+        ["· 템플릿: jinmyeong_front_192x160 / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
+        ["· 구분: 일반 / 급행 / 좌석 / 심야 / 마을 / 순환 (색·반전은 프로그램의 스타일 탭에서 바꿈)"],
+        ["· 영문 칸을 비워 두고 불러온 뒤 [편집 탭 → 모든 노선 채우기]를 누르면 자동으로 채워집니다."],
+        ["· '설명' 열처럼 제목이 다른 열은 무시됩니다."],
+    ]:
+        g.append(line)
+    g.column_dimensions["A"].width = 120
+    g["A1"].font = Font(bold=True, size=14)
+    wb.active = 0
     wb.save(path)
 
 
@@ -2612,7 +2686,7 @@ SELFTEST_ROUTES = [
      "via": "", "template": "simple_front_192x160"},
 ]
 SELFTEST_STYLES = [{}, {"num_weight": "균일 2픽셀", "arrow_shape": "→"}, {"num_weight": "균일 3픽셀"}]
-SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'f55da8885f154f6a', '58-1#0': '15d0ae4361f4ff94', '7-12#0': '44a7a4a1346c97ff', '360#1': 'a30ee2e589538682', '1100#1': 'bdd0df5c2c22033e', '58-1#1': 'bba43390687105c9', '7-12#1': '5fe5c322428ba176', '360#2': '15b0ac3bfbf10f6f', '1100#2': '88e8da31c3aeb8ae', '58-1#2': '1702fe42d4a3cf5b', '7-12#2': '44a7a4a1346c97ff'}  # 검증 완료된 기준 이미지 해시
+SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff'}  # 검증 완료된 기준 이미지 해시
 
 
 def selftest_hashes():

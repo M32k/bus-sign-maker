@@ -4,8 +4,9 @@
 |---|---|
 | 윈도우 10/11 | `BusSignMaker-Windows.exe` (설치 없이 바로 실행) |
 | 맥 (애플 실리콘 M1~M4) | `BusSignMaker-macOS-AppleSilicon.dmg` |
+| 리눅스 (x86_64, Ubuntu 22.04 이후 등) | `BusSignMaker-Linux-x86_64.tar.gz` |
 
-두 파일 모두 GitHub 서버에서 자동으로 빌드했고, 빌드할 때 기준 이미지 12장과 픽셀 단위로 같은지 자체검사를 통과한 것만 올라갑니다.
+세 파일 모두 GitHub 서버에서 자동으로 빌드했고, 빌드할 때 기준 이미지 12장과 픽셀 단위로 같은지 자체검사를 통과한 것만 올라갑니다.
 
 ## 처음 실행할 때
 
@@ -19,6 +20,16 @@
   ```
   xattr -dr com.apple.quarantine /Applications/BusSignMaker.app
   ```
+
+**리눅스**: 압축을 풀고 실행하세요.
+```
+tar xzf BusSignMaker-Linux-x86_64.tar.gz
+./BusSignMaker-Linux-x86_64/BusSignMaker
+```
+
+## 엑셀 샘플
+
+[`samples/노선샘플.xlsx`](https://github.com/M32k/bus-sign-maker/raw/main/samples/%EB%85%B8%EC%84%A0%EC%83%98%ED%94%8C.xlsx)를 받아서 [파일 → 엑셀 불러오기]로 열어 보세요. 급행·심야·마을버스, 측면·후면판, 영문 자동 변환, 압축 경고 예시가 들어 있습니다.
 
 ## 사용법
 

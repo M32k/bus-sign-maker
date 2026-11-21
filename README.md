@@ -14,6 +14,7 @@
 |---|---|
 | 윈도우 10/11 | `BusSignMaker-Windows.exe` — 설치 없이 바로 실행 |
 | 맥 (애플 실리콘) | `BusSignMaker-macOS-AppleSilicon.dmg` |
+| 리눅스 (x86_64) | `BusSignMaker-Linux-x86_64.tar.gz` — 압축 풀고 `./BusSignMaker` 실행 |
 
 릴리스 파일은 GitHub Actions가 윈도우·맥 서버에서 직접 빌드하고, 자체검사를 통과한 것만 올라갑니다.
 처음 실행할 때 나오는 보안 경고는 [릴리스 설명](.github/RELEASE_NOTES.md)을 참고하세요.
@@ -42,9 +43,33 @@
 |---|---|---|
 | ![점 편집](docs/images/dot-edit.png) | ![글자 보정](docs/images/glyph-editor.png) | ![압축 경고](docs/images/warnings.png) |
 
-## 실행
+## 소스로 실행
 
 Python 3.10 이상(tkinter 포함)이 필요합니다.
+
+### 리눅스
+
+```bash
+# 1) tkinter 설치 (한 번만)
+sudo apt install python3-tk python3-venv      # Ubuntu / Debian / Mint
+sudo dnf install python3-tkinter              # Fedora
+sudo pacman -S tk                             # Arch
+
+# 2) 받아서 실행 — 처음에는 가상환경을 알아서 만듭니다
+git clone https://github.com/M32k/bus-sign-maker
+cd bus-sign-maker
+bash run_linux.sh              # 프로그램 실행
+bash run_linux.sh --selftest   # 자체검사
+```
+
+릴리스의 `BusSignMaker-Linux-x86_64.tar.gz`를 쓰면 파이썬 없이도 바로 실행됩니다.
+
+```bash
+tar xzf BusSignMaker-Linux-x86_64.tar.gz
+./BusSignMaker-Linux-x86_64/BusSignMaker
+```
+
+### 맥 / 윈도우
 
 ```bash
 pip3 install "pillow==12.3.0" "numpy==2.5.3" "openpyxl==3.1.5"
@@ -72,7 +97,10 @@ python3 bus_sign_maker.py --selftest
 
 ## 엑셀 형식
 
-첫 줄은 제목 줄입니다. `파일 → 샘플 엑셀 만들기`로 예시를 받을 수 있습니다.
+첫 줄은 제목 줄입니다. 바로 써 볼 수 있는 예시가 [`samples/노선샘플.xlsx`](samples/노선샘플.xlsx)에 있습니다
+(프로그램의 `파일 → 샘플 엑셀 만들기`로도 같은 파일을 만들 수 있습니다).
+9개 노선에 급행·좌석·심야·마을·순환, 측면·전면 한 줄·후면판, 영문이 빈 노선(자동 변환 연습용), 압축 경고 예시가 들어 있고,
+두 번째 시트 `사용법`에 열 설명이 있습니다.
 
 | 번호 | 기점(한) | 종점(한) | 기점(영) | 종점(영) | 경유지 | 템플릿 | 구분 |
 |---|---|---|---|---|---|---|---|
