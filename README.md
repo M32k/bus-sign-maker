@@ -6,6 +6,18 @@
 
 ![메인 화면](docs/images/main.png)
 
+## 내려받기
+
+[**Releases**](https://github.com/M32k/bus-sign-maker/releases/latest)에서 운영체제에 맞는 파일을 받으세요.
+
+| 운영체제 | 파일 |
+|---|---|
+| 윈도우 10/11 | `BusSignMaker-Windows.exe` — 설치 없이 바로 실행 |
+| 맥 (애플 실리콘) | `BusSignMaker-macOS-AppleSilicon.dmg` |
+
+릴리스 파일은 GitHub Actions가 윈도우·맥 서버에서 직접 빌드하고, 자체검사를 통과한 것만 올라갑니다.
+처음 실행할 때 나오는 보안 경고는 [릴리스 설명](.github/RELEASE_NOTES.md)을 참고하세요.
+
 | 출력 예 (192×160, 4배 확대) | 지원하는 판 |
 |---|---|
 | ![360번 출력](docs/images/output-360.png) | ![템플릿](docs/images/templates.png) |

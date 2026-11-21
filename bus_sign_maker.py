@@ -2646,6 +2646,15 @@ def run_selftest():
 
 
 if __name__ == "__main__":
+    # 창 모드로 묶인 윈도우 exe 에는 콘솔이 없어서 print 가 실패함 → 버리는 곳으로 돌림
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(errors="replace")   # 한글을 못 쓰는 콘솔에서도 멈추지 않게
+    except Exception:
+        pass
     if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
         sys.exit(run_selftest())
     if len(sys.argv) > 2 and sys.argv[1] == "--render":  # 테스트용: --render out.bmp

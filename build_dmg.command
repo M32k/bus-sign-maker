@@ -10,9 +10,10 @@ DISPLAY_NAME="노선이미지 생성기"
 VERSION="2.0"
 
 echo "▶ 1/5  tkinter 되는 파이썬 찾는 중…"
-PY=""
+PY="${PY_OVERRIDE:-}"     # 자동 빌드(GitHub Actions)에서는 파이썬 경로를 직접 지정
 CANDS=(/Library/Frameworks/Python.framework/Versions/3.*/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 python3)
 for c in "${CANDS[@]}"; do
+  [ -n "$PY" ] && break
   if command -v "$c" >/dev/null 2>&1; then
     # Tk 8.6 이상만 사용 (애플 기본 python3의 Tk 8.5는 화면이 깨짐)
     if "$c" -c "import tkinter,sys; v=tkinter.Tcl().eval('info patchlevel'); sys.exit(0 if tuple(map(int,v.split('.')[:2]))>=(8,6) else 1)" 2>/dev/null; then
@@ -25,7 +26,7 @@ if [ -z "$PY" ]; then
   echo "✖ tkinter(Tk 8.6+)가 들어있는 파이썬이 없습니다. 둘 중 하나를 설치한 뒤 다시 실행하세요:"
   echo "   · python.org 에서 macOS용 Python 3.12 설치 (가장 간단)"
   echo "   · 또는 Homebrew:  brew install python python-tk"
-  read -n 1 -s -r -p "아무 키나 누르면 닫힙니다…"; exit 1
+  [ -z "$CI" ] && read -n 1 -s -r -p "아무 키나 누르면 닫힙니다…"; exit 1
 fi
 echo "   → $PY ($("$PY" --version))"
 
@@ -57,7 +58,7 @@ pyinstaller --noconfirm --clean --windowed \
   --hidden-import numpy \
   --hidden-import PIL._tkinter_finder \
   --hidden-import PIL.ImageTk \
-  bus_sign_maker.py >/dev/null 2>&1 || { echo "✖ PyInstaller 실패 — 아래 명령으로 로그 확인:"; echo "  source .build_venv/bin/activate && pyinstaller --windowed bus_sign_maker.py"; exit 1; }
+  bus_sign_maker.py > pyinstaller.log 2>&1 || { echo "✖ PyInstaller 실패 — 로그 끝부분:"; tail -30 pyinstaller.log; exit 1; }
 
 PL="dist/$APP.app/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$DISPLAY_NAME" "$PL"
@@ -76,11 +77,11 @@ cp -R "dist/$APP.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$APP.dmg"
 hdiutil create -volname "$DISPLAY_NAME" -srcfolder "$STAGE" -ov -format UDZO "$APP.dmg" >/dev/null
-rm -rf "$STAGE" .icon.iconset build "$APP.spec"
+rm -rf "$STAGE" .icon.iconset build "$APP.spec" pyinstaller.log
 deactivate
 
 echo ""
 echo "✔ 완료!"
 echo "   앱 : $(pwd)/dist/$APP.app"
 echo "   DMG: $(pwd)/$APP.dmg"
-open -R "$APP.dmg"
+[ -z "$CI" ] && open -R "$APP.dmg" || true
