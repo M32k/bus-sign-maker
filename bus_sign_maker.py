@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.1 (2026-11-22)"
+APP_VERSION = "2.2 (2026-11-22)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -26,6 +26,19 @@ PRESET_FILE = APP_DIR / "presets.json"
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 BUNDLED_FONT = BASE_DIR / "fonts" / "NanumGothic-Regular.ttf"
 BUNDLED_BOLD = BASE_DIR / "fonts" / "NanumGothic-Bold.ttf"
+CJK_FONT = BASE_DIR / "fonts" / "NotoSansCJKjp-Subset.otf"   # 일본어 가나·한자 (나눔고딕에 없는 글자)
+TINY_FONT = BASE_DIR / "fonts" / "Galmuri7-Subset.ttf"       # 7픽셀 픽셀 글꼴 (아주 작은 영문 두 줄용)
+
+
+def needs_cjk(ch):
+    o = ord(ch)
+    return (0x3000 <= o <= 0x30FF or 0x31F0 <= o <= 0x31FF or 0x3400 <= o <= 0x4DBF
+            or 0x4E00 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF)
+
+
+def _ref(font_path):
+    """줄 높이 기준 글자: 한자 글꼴은 '国あAg', 그 외는 '힣갈Ag'"""
+    return "国あAg" if font_path and Path(str(font_path)).name.startswith("NotoSansCJK") else "힣갈Ag"
 FONT_CANDIDATES = [
     str(BUNDLED_FONT),
     # macOS
@@ -131,7 +144,17 @@ STYLE_KEYS = [  # (키, 라벨, 기본값)
     ("align", "정렬", "가운데"),
     ("weight", "글자획", "1픽셀"),
     ("num_weight", "번호획", "원본형"),
+    ("old_box", "구형 번호상자", "검은바탕·빨간숫자"),
+    ("old_grad", "구형 글자색", "주황 한 색"),
+    ("old_arrow", "구형 화살표", "빨간 삼각형"),
+    ("new_via", "신형 경유지 화면", "두 줄 크게"),
+    ("new_express", "신형 번호색", "흰색"),
 ]
+OLD_BOX_STYLES = ["(기본)", "검은바탕·빨간숫자", "빨강바탕·검은숫자", "빨강바탕·주황숫자"]
+OLD_GRAD_STYLES = ["(기본)", "주황 한 색", "그라데이션"]
+OLD_ARROW_STYLES = ["(기본)", "빨간 삼각형", "굵은 화살표"]
+NEW_VIA_STYLES = ["(기본)", "두 줄 크게", "끔"]
+NEW_EXPRESS_STYLES = ["(기본)", "흰색", "구분별 색", "빨강→분홍"]
 # 폰트 설정도 프리셋에 같이 저장됨 (빈 값 = 자동)
 FONT_KEYS = ["text_font", "num_font", "pixel_mode"]
 ARROW_SHAPES = ["(기본)", "◆", "→", "▶", "↔"]
@@ -148,6 +171,7 @@ def resolve_style(style):
     for k in FONT_KEYS:
         out[k] = (style or {}).get(k) or ""
     out["kinds"] = (style or {}).get("kinds") or {}
+    out["_raw"] = dict(style or {})
     return out
 
 
@@ -186,7 +210,7 @@ def render_segments(segments, target_h, max_w, font_path=None, stroke=None):
         return Image.new("RGBA", (1, target_h), (0, 0, 0, 0))
     # 세로는 폰트 기준선(글자마다 높이 다르지 않게)으로 자름
     # 기준 글자("힣Ag|")의 실제 잉크 높이로 자름 → 여백 없이 줄 높이를 꽉 채움
-    _, rt, _, rb = font.getbbox("힣갈Ag", anchor="la")
+    _, rt, _, rb = font.getbbox(_ref(font_path), anchor="la")
     top = int(RENDER_SIZE * 0.4 + rt)
     bot = int(RENDER_SIZE * 0.4 + rb)
     top, bot = min(top, bbox[1]), max(bot, bbox[3])
@@ -195,6 +219,8 @@ def render_segments(segments, target_h, max_w, font_path=None, stroke=None):
     w = max(1, min(max_w, round(big.width * scale)))
     if stroke is None:
         stroke = CFG["num_stroke"] if is_num else CFG["stroke"]
+    if stroke == "bold":
+        return uniform_stroke_from_big(big, w, target_h, 1, xbold=True)
     if stroke and stroke > 0:
         return uniform_stroke_from_big(big, w, target_h, stroke)
     small = big.resize((w, target_h), Image.LANCZOS)
@@ -265,22 +291,37 @@ def _thin_seq(m):
 SS = 4  # 중심선을 뽑는 해상도 배율
 
 
-def uniform_stroke_from_big(big, w, h, stroke):
+def uniform_stroke_from_big(big, w, h, stroke, xbold=False):
     """고해상도 글자 → 중심선 추출 → 목표 크기로 축소 → 다시 1px로 → stroke 두께로 칠함.
     모든 획이 같은 픽셀 두께가 됨 (LED 비트맵 폰트처럼)."""
     import numpy as np
     # 획을 칠할 여유(stroke-1)만큼 작은 칸에서 중심선을 뽑아야 오른쪽·아래 끝이 잘리지 않음
-    sw, sh_ = max(1, w - stroke + 1), max(1, h - stroke + 1)
+    xb = 1 if xbold else 0      # 가로로만 굵게(세로획 2칸, 가로획 1칸): 작은 한글에서도 획이 붙지 않음
+    sw, sh_ = max(1, w - stroke + 1 - xb), max(1, h - stroke + 1)
     mid = big.resize((sw * SS, sh_ * SS), Image.BOX)
     a = np.asarray(mid.split()[3]) > 110
     sk = _thin(a)
     # 축소: SS×SS 칸에 중심선이 한 점이라도 지나가면 켬
     low = sk.reshape(sh_, SS, sw, SS).any(axis=(1, 3))
     low = _thin_seq(low)
+    if not low.any() and a.any():
+        # 마침표처럼 아주 작은 점은 중심선이 사라짐 → 가장 진하게 덮인 칸 하나를 켬
+        cov = a.reshape(sh_, SS, sw, SS).sum(axis=(1, 3))
+        low = cov == cov.max()
     full = np.zeros((h, w), bool)
     for dy in range(stroke):
         for dx in range(stroke):
             full[dy:dy + sh_, dx:dx + sw] |= low
+    if xb:
+        # 가로로 한 칸 굵게. 단, 두 칸 옆에 다른 획이 있으면 굵히지 않음
+        # (13픽셀 '해'·'대'의 ㅐ 두 줄기가 붙어 덩어리가 되는 것 방지)
+        nxt2 = np.zeros_like(low)
+        nxt2[:, :-2] = low[:, 2:]
+        nxt1 = np.zeros_like(low)
+        nxt1[:, :-1] = low[:, 1:]
+        grow = low & ~nxt2 & ~nxt1
+        for dy in range(stroke):
+            full[dy:dy + sh_, stroke:stroke + sw] |= grow
     low = full
     # 색: 원래 위치의 색(구분자 노랑 등) 유지, 빈 곳은 가까운 색으로 채움
     rgb = np.asarray(big.resize((w, h), Image.BOX).convert("RGBA"))[:, :, :3].copy()
@@ -481,7 +522,7 @@ def render_segments_pixel(segs, target_h, max_w, font_path):
 def natural_width(text, target_h, font_path=None):
     font = get_font(font_path or text_font(), RENDER_SIZE)
     asc, desc = font.getmetrics()
-    _, rt, _, rb = font.getbbox("힣갈Ag", anchor="la")
+    _, rt, _, rb = font.getbbox(_ref(font_path), anchor="la")
     return font.getlength(text) * target_h / (rb - rt)
 
 
@@ -742,7 +783,49 @@ def squeeze_w(img, w):
     return Image.fromarray(a[:, keep], "RGBA")
 
 
-def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1):
+def _plain_one(m):
+    """'1'의 아래 받침을 지움 (부산 신형 전광판 숫자는 받침 없는 1)"""
+    import numpy as np
+    h = m.shape[0]
+    stem = m[h // 2]
+    if not stem.any():
+        return m
+    m = m.copy()
+    for y in range(h - max(2, h // 5), h):
+        m[y] &= stem
+    xs = np.where(m.any(0))[0]
+    return m[:, xs[0]:xs[-1] + 1] if len(xs) else m
+
+
+def _squeeze_keep_dash(text, cols, track, target_h, max_w, em):
+    """글자마다 따로 좁혀서 붙임. '-'는 최소 4칸을 지켜 점(·)처럼 보이지 않게 (부산 판: 128-1)"""
+    import numpy as np
+
+    def ink(m):
+        xs = np.where(m.any(0))[0]
+        return m[:, xs.min():xs.max() + 1] if len(xs) else m[:, :1]
+    items = [(ch, None if c is None else ink(c[0])) for ch, c in zip(text, cols)]
+    gap = max(1, track + 1)
+    dash_w = max(5, target_h // 5)
+    sp = round(em * 0.28)
+    fixed = gap * (len(items) - 1) + sum(sp for _, m in items if m is None) + sum(dash_w for ch, _ in items if ch == "-")
+    var = sum(m.shape[1] for ch, m in items if m is not None and ch != "-")
+    k = min(1.0, max(0.3, (max_w - fixed) / max(1, var)))
+    parts = []
+    for ch, m in items:
+        if m is None:
+            parts.append(np.zeros((target_h, sp), bool)); continue
+        w = dash_w if ch == "-" else max(1, int(m.shape[1] * k))
+        parts.append(np.asarray(Image.fromarray(m).resize((w, target_h), Image.NEAREST)))
+    out = np.zeros((target_h, sum(p_.shape[1] for p_ in parts) + gap * (len(parts) - 1)), bool)
+    x = 0
+    for p_ in parts:
+        out[:, x:x + p_.shape[1]] = p_
+        x += p_.shape[1] + gap
+    return out
+
+
+def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1, warn=True, plain1=False, keep_dash=False):
     """원본 번호 방식: Arial Bold형 글꼴을 비AA로 찍고, 글자마다 정수 위치, 넘치면 가로 압축."""
     import numpy as np
     path = str(ORIG_NUM_FONT) if ORIG_NUM_FONT.exists() else num_font()
@@ -777,7 +860,12 @@ def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1):
         ImageDraw.Draw(big).text((0, asc), ch, font=f, fill=255, anchor="ls")
         big = big.crop((0, asc + rt, big.width, asc + rb))
         sm = big.resize((max(1, round(big.width * kx / _NUM_SS)), target_h), Image.BOX)
-        cols.append((np.asarray(sm) > th, round(adv * kx / _NUM_SS)))
+        m = np.asarray(sm) > th
+        if plain1 and ch == "1":
+            m = _plain_one(m)
+            cols.append((m, m.shape[1] + max(2, target_h // 8)))
+            continue
+        cols.append((m, round(adv * kx / _NUM_SS)))
     total = sum((c[1] if c else round(em * 0.28)) + track for c in cols) + target_h
     out = np.zeros((target_h, max(1, total)), bool)
     x = 0
@@ -796,8 +884,17 @@ def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1):
     rgba[out, :3] = color
     rgba[out, 3] = 255
     im = Image.fromarray(rgba, "RGBA")
+    if im.width > max_w and keep_dash and "-" in text:
+        out = _squeeze_keep_dash(text, cols, track, target_h, max_w, em)
+        if out.shape[1] <= max_w:
+            rgba = np.zeros(out.shape + (4,), np.uint8)
+            rgba[out, :3] = color
+            rgba[out, 3] = 255
+            return Image.fromarray(rgba, "RGBA")
+        im = Image.fromarray(np.dstack([np.where(out[..., None], np.array(color, np.uint8), 0), (out * 255).astype(np.uint8)]).astype(np.uint8), "RGBA")
     if im.width > max_w:       # 번호는 원본과 같은 최근접 압축이 가장 일치함
-        _warn(f"번호 {text}", max_w / im.width, limit=0.62)   # 작은 번호는 원본도 75% 정도로 눌러 그림
+        if warn:
+            _warn(f"번호 {text}", max_w / im.width, limit=0.62)   # 작은 번호는 원본도 75% 정도로 눌러 그림
         im = im.resize((max_w, im.height), Image.NEAREST)
     return im
 
@@ -805,10 +902,11 @@ def render_num_orig(text, color, target_h, max_w, kx=1.0, th=80, track=1):
 def is_wide(ch):
     o = ord(ch)
     return (0xAC00 <= o <= 0xD7A3 or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F
-            or 0x4E00 <= o <= 0x9FFF or 0xFF00 <= o <= 0xFFEF)
+            or 0x4E00 <= o <= 0x9FFF or 0xFF00 <= o <= 0xFFEF or 0x3040 <= o <= 0x30FF
+            or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF)
 
 
-def render_mono(segs, target_h, full, half, max_w):
+def render_mono(segs, target_h, full, half, max_w, stroke=None):
     """원본처럼 고정폭 배치: 한글 = full칸, 영문·숫자·기호 = half칸.
     줄이 넘치면 칸을 비율대로 좁히고 글자를 그 폭에 맞춰 '다시 그림' → 좁아져도 획은 1픽셀 유지."""
     chars = [(ch, color) for text, color in segs for ch in text]
@@ -833,7 +931,8 @@ def render_mono(segs, target_h, full, half, max_w):
             if ov is not None and ov.shape[0] == target_h:
                 g = squeeze_w(bool_to_rgba(ov, color), room)
             else:
-                g = render_segments([(ch, color)], target_h, room)
+                fp = str(CJK_FONT) if needs_cjk(ch) and CJK_FONT.exists() else None
+                g = render_segments([(ch, color)], target_h, room, font_path=fp, stroke=stroke)
             if g.getbbox():              # 폭 1픽셀짜리 글자(l, i, I)도 그림
                 out.alpha_composite(g, (x0 + (room - g.width) // 2, 0))
         x += cell
@@ -950,14 +1049,770 @@ def tpl_simple_front(r, st):
     return img.convert("RGB")
 
 
+# ───────────────────────── 부산 구형 3색 LED (192×32) ─────────────────────────
+# 영상(부산 시내버스 37번 구형 LED)을 보고 만든 배치. 빨강·초록·주황(빨강+초록) 3색.
+OLD_W, OLD_H = 192, 32
+OLD_RED, OLD_GREEN, OLD_AMBER = (255, 40, 30), (40, 255, 60), (255, 185, 0)   # 낮 영상(187번) 기준
+OLD_MS = {"big": 2000, "via": 1000, "route": 1500, "slogan": 2000, "logo": 2000, "seats": 2000, "brand": 2000}
+
+
+# (선택 사항) 스타일 탭 '구형 글자색 = 그라데이션'일 때만 씀. 기본은 주황 한 색
+OLD_GRAD = [(0.0, (255, 45, 10)), (0.22, (255, 135, 0)), (0.5, (255, 210, 0)), (0.85, (235, 240, 0)), (1.0, (150, 255, 20))]
+
+
+def _lerp_stops(stops, t):
+    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+        if t <= t1:
+            k = 0 if t1 == t0 else (t - t0) / (t1 - t0)
+            return tuple(round(a + (b - a) * k) for a, b in zip(c0, c1))
+    return stops[-1][1]
+
+
+def grad_v(im, stops=OLD_GRAD, y0=None, y1=None):
+    """켜진 점을 세로 위치에 따라 색칠 (y0~y1 = 그라데이션 범위, 없으면 글자 잉크 높이)"""
+    import numpy as np
+    a = np.asarray(im.convert("RGBA")).copy()
+    on = a[:, :, 3] > 0
+    if not on.any():
+        return im
+    ys = np.where(on.any(1))[0]
+    y0 = ys[0] if y0 is None else y0
+    y1 = ys[-1] if y1 is None else y1
+    for y in range(a.shape[0]):
+        if on[y].any():
+            t = min(1.0, max(0.0, (y - y0) / max(1, y1 - y0)))
+            a[y, on[y], :3] = _lerp_stops(stops, t)
+    return Image.fromarray(a, "RGBA")
+
+
+def grad_h(im, stops):
+    """켜진 점을 가로 위치에 따라 색칠 (신형 급행 번호: 빨강 → 분홍)"""
+    import numpy as np
+    a = np.asarray(im.convert("RGBA")).copy()
+    on = a[:, :, 3] > 0
+    if not on.any():
+        return im
+    xs = np.where(on.any(0))[0]
+    for x in range(a.shape[1]):
+        if on[:, x].any():
+            t = min(1.0, max(0.0, (x - xs[0]) / max(1, xs[-1] - xs[0])))
+            a[on[:, x], x, :3] = _lerp_stops(stops, t)
+    return Image.fromarray(a, "RGBA")
+
+
+def _old_colors(st):
+    """스타일 탭 색을 고르면 그 색을 쓰고, (기본)이면 3색 LED 기본값"""
+    raw = st.get("_raw") or {}
+
+    def pick(key, default):
+        v = raw.get(key)
+        return COLORS.get(v) if v and v != "(기본)" and COLORS.get(v) else default
+    # 실제 구형 3색 LED는 한 색(주황). 그라데이션은 낮 영상의 카메라 색 번짐이라 기본에서 뺌
+    grad = (st.get("old_grad") or "주황 한 색") == "그라데이션"
+    return {"num": pick("num_big", OLD_AMBER), "box": pick("num_small", OLD_RED), "top": pick("end", OLD_AMBER),
+            "via": pick("via", OLD_GREEN), "arrow": pick("arrow", OLD_RED),
+            "box_style": st.get("old_box") or "검은바탕·빨간숫자",
+            "arrow_style": st.get("old_arrow") or "빨간 삼각형",
+            # 직접 고른 색이 있으면 그 색 그대로(그라데이션 안 함)
+            "grad_top": grad and raw.get("end") in (None, "", "(기본)"),
+            "grad_num": grad and raw.get("num_big") in (None, "", "(기본)")}
+
+
+def _g(im, c, key="grad_top"):
+    return grad_v(im) if c.get(key) else im
+
+
+def _old_box_w(num):
+    """번호 상자 너비: 짧은 번호는 30, 긴 번호(128-1 등)는 사진처럼 상자를 넓혀 숫자를 덜 누름 (최대 50)"""
+    if not num:
+        return 30
+    nat = render_num_orig(num, (255, 255, 255), 24, 10 ** 4, kx=0.96, th=100, track=1, warn=False).width
+    if nat <= 26 * 1.3:                     # 2~3자리는 영상(37·187번)과 같은 30칸 상자
+        return 30
+    return max(30, min(50, round(nat * 0.75) + 4))
+
+
+def _old_numbox(img, num, c, rule):
+    """번호 상자 (초록 테두리). 스타일 탭 '구형 번호상자'로 모양 선택. 구분(급행 등)이면 그 색을 바탕색으로"""
+    d = ImageDraw.Draw(img)
+    box = c.get("box_style", "검은바탕·빨간숫자")   # 실제 부산 구형: 검은 바탕 + 빨간 숫자 + 초록 테두리
+    fill = rule["color"] if rule else c["box"]
+    bw = c.get("box_w", 30)
+    if box == "검은바탕·빨간숫자":
+        d.rectangle([0, 0, bw - 1, 31], outline=OLD_GREEN + (255,))
+        n = render_num_orig(num, fill, 24, bw - 4, kx=0.96, th=100, track=1, warn=False, keep_dash=True)
+        img.alpha_composite(n, ((bw - n.width) // 2, (32 - n.height) // 2))
+        return
+    d.rectangle([0, 0, bw - 1, 31], fill=fill + (255,), outline=OLD_GREEN + (255,))
+    digit = (0, 0, 0) if box == "빨강바탕·검은숫자" else c["num"]
+    n = render_num_orig(num, digit, 24, bw - 4, kx=0.96, th=100, track=1, warn=False, keep_dash=True)
+    if digit == (0, 0, 0):          # 꺼진 점으로 숫자 모양을 뚫음 (낮 영상 187번)
+        import numpy as np
+        a = np.asarray(img).copy()
+        m = np.asarray(n)[:, :, 3] > 0
+        x0, y0 = (bw - n.width) // 2, (32 - n.height) // 2
+        sub = a[y0:y0 + n.height, x0:x0 + n.width]
+        sub[m] = (0, 0, 0, 255)
+        img.paste(Image.fromarray(a, "RGBA"))
+    else:
+        img.alpha_composite(n, ((bw - n.width) // 2, (32 - n.height) // 2))
+
+
+def _old_triangle(img, x, cy, h, color, inner=None):
+    """▶ (신형 경유지 구분 등에 씀). inner 색이 있으면 안쪽을 그 색으로"""
+    d = ImageDraw.Draw(img)
+    w = max(3, h * 2 // 3)
+    pts = [(x, cy - h // 2), (x + w, cy), (x, cy + h // 2)]
+    d.polygon(pts, fill=color + (255,))
+    if inner and h >= 12:
+        d.polygon([(x + 2, cy - h // 2 + 3), (x + w - 3, cy), (x + 2, cy + h // 2 - 3)], fill=inner + (255,))
+    return w
+
+
+def _old_arrow(img, x, cy, h, color, style="굵은 화살표"):
+    """구형 기점→종점 화살표. 기본 '빨간 삼각형'(37·187번 영상, 128-1·57번 사진),
+    '굵은 화살표'는 1번 영상처럼 몸통 + 머리. 너비를 돌려줌"""
+    d = ImageDraw.Draw(img)
+    if style != "굵은 화살표":
+        w = max(4, h * 3 // 4)
+        d.polygon([(x + 2, cy - h // 2), (x + 2 + w, cy), (x + 2, cy + h // 2)], fill=color + (255,))
+        return w + 4
+    head = max(4, h * 5 // 9)               # 머리 길이
+    shaft = max(3, h * 2 // 3)              # 몸통 길이
+    sh = max(2, h * 4 // 9)                 # 몸통 두께
+    d.rectangle([x, cy - sh // 2, x + shaft - 1, cy - sh // 2 + sh - 1], fill=color + (255,))
+    d.polygon([(x + shaft - 1, cy - h // 2), (x + shaft - 1 + head, cy), (x + shaft - 1, cy + h // 2)],
+              fill=color + (255,))
+    return shaft + head
+
+
+OLD_ROWS = {  # 줄 이름: (줄높이, 한글·한자 칸폭, 반각 칸폭, 획)
+    "top": (16, 15, 9, "bold"),      # 경유지 화면 윗줄 (기점 ▶ 종점)
+    "via": (12, 14, 8, "bold"),      # 경유지 화면 아랫줄 (영문)
+    "via_ko": (14, 14, 8, 1),        # 경유지 화면 아랫줄 (한글: 12픽셀이면 ㅇ이 ㅁ처럼 보여 14)
+    "big": (20, 19, 11, "bold"),     # 행선 화면 한 줄
+    "two": (13, 14, 9, "bold"),      # 행선 화면 두 줄
+    "ntop": (17, 16, 9, "bold"),     # 신형: 윗줄 'OO행' (영상 99번: 글자가 판 위쪽 절반 이상을 채움)
+    "ndest": (24, 24, 12, 2),        # 신형 번호 + 'OO행' (1000번 영상: 글자 높이 ≈ 번호의 80%)
+    "ndest2": (22, 22, 11, 2),       # 위가 안 들어갈 때
+    "nvia2": (15, 15, 7, 1),         # 신형 경유지 두 줄 화면 (15픽셀이어야 '진·정'의 ㅈ이 또렷함)
+    "nvia": (14, 14, 8, "bold"),     # 신형: 아랫줄 경유지 (13픽셀이면 '청'의 ㅇ이 ㅁ처럼 보여서 14)
+    "seat": (22, 19, 12, "bold"),
+    "nbig": (20, 19, 11, 2),         # 신형 한 줄 'OO행'·문구 (영상: 2픽셀 굵은 획)
+    "nsub": (16, 16, 9, 2),          # 신형 윗줄 '다 대 포 행' (벌려 씀)    # 잔여좌석 글자
+}
+
+
+def _old_text(text, color, row, max_w):
+    h, full, half, stroke = OLD_ROWS[row]
+    # 작은 줄의 한글·한자는 굵게 하면 획이 뭉개짐(장안산단, 公營) → 그 줄만 가늘게
+    if (h <= 13 or row == "nvia") and (any(needs_cjk(ch) for ch in text) or (row in ("via", "nvia") and has_hangul(text))):
+        stroke = 1
+    return render_mono([(text, color)], h, full, half, max_w, stroke=stroke)
+
+
+def _smart_split(text):
+    """두 줄로 나누기: 띄어쓰기 → 영문/한자 경계(Gowon|アパート) → 글자 절반 순"""
+    if " " in text:
+        return split_two(text)
+    bounds = [i for i in range(1, len(text)) if is_wide(text[i]) != is_wide(text[i - 1])]
+    if bounds:
+        i = min(bounds, key=lambda b: abs(b - len(text) / 2))
+        return text[:i], text[i:]
+    h = (len(text) + 1) // 2
+    return text[:h], text[h:]
+
+
+def _old_top_row(img, start, end, c):
+    """윗줄: 기점 ▶ 종점 (주황, 굵게). 칸이 모자라면 기점·종점을 같은 비율로 좁혀 다시 그림"""
+    x0, x1, h, y = c.get("box_w", 30) + 2, 192, 16, 1
+    tri = 14
+    gap = 3
+    a = _old_text(start, c["top"], "top", 10 ** 4) if start else None
+    b = _old_text(end, c["top"], "top", 10 ** 4) if end else None
+    room = (x1 - x0) - (tri + 2 * gap if a and b else 0)
+    wa, wb = (a.width if a else 0), (b.width if b else 0)
+    if wa + wb > room:
+        k = room / (wa + wb)
+        _warn(f"{start}▶{end}", k)
+        if a:
+            a = _old_text(start, c["top"], "top", max(4, int(wa * k)))
+        if b:
+            b = _old_text(end, c["top"], "top", max(4, int(wb * k)))
+    total = (a.width if a else 0) + (b.width if b else 0) + (tri + 2 * gap if a and b else 0)
+    x = x0 + (x1 - x0 - total) // 2
+    if a:
+        img.alpha_composite(_g(a, c), (x, y)); x += a.width + gap
+    if a and b:
+        _old_arrow(img, x, y + h // 2, 11, c["arrow"], c["arrow_style"]); x += tri + gap
+    if b:
+        img.alpha_composite(_g(b, c), (x, y))
+
+
+def _old_en_parts(text, c):
+    """영문 경유지가 비례폭 12칸으로도 판(약 160칸)에 85% 이상 눌러야 하면 단어 경계에서 두 화면으로 나눔"""
+    W = 192 - (c.get("box_w", 30) + 2)
+    nat = render_segments([(text, (255, 255, 255))], 12, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold").width
+    if nat * 0.85 <= W or " " not in text:
+        return [text]
+    a, b = split_two(text)
+    return [a.strip(), b.strip()]
+
+
+def _old_bottom_row(img, text, c):
+    """아랫줄: 경유지 하나 (초록, 가는 획), 가운데 정렬"""
+    X0 = c.get("box_w", 30) + 2
+    W = 192 - X0
+    one = _old_text(text, c["via"], "via", 10 ** 4)
+    if one.width > W and not has_hangul(text) and not any(needs_cjk(ch) for ch in text):
+        # 긴 영문: 고정폭 대신 비례폭 굵은 글씨(12칸). 7픽셀은 승객이 못 읽어서 쓰지 않음
+        t = render_segments([(text, c["via"])], 12, W, font_path=str(LATIN_BOLD), stroke="bold")
+        img.alpha_composite(t, (X0 + (W - t.width) // 2, 20))
+        return
+    if has_hangul(text):                    # 사진(128-1번 '활 천 고 개')처럼 글자 사이를 벌림
+        t = _spaced(text, c["via"], "via_ko", W - 10)
+        img.alpha_composite(t, (X0 + (W - t.width) // 2, 18))
+        return
+    t = _old_text(text, c["via"], "via", W)
+    img.alpha_composite(t, (X0 + (W - t.width) // 2, 20))
+
+
+def _old_route_page(img, start, end, c, breaks=(None, None)):
+    """행선 화면: 기점(두 줄 가능) ▶ 종점(크게). breaks = 사용자가 '|'로 정한 두 줄 나눔"""
+    def block(text, x0, x1, forced=None):
+        bw = x1 - x0
+        if not text:
+            return
+        if forced:                          # '김해|구산동' → 김해 / 구산동
+            for i, part in enumerate(forced):
+                li = _old_text(part, c["top"], "two", bw)
+                img.alpha_composite(_g(li, c), (x0 + (bw - li.width) // 2, 2 + i * 15))
+            return
+        one = _old_text(text, c["top"], "big", 10 ** 4)
+        latin_word = " " not in text and not any(is_wide(ch) for ch in text)
+        mixed = any(is_wide(ch) for ch in text) and any(ch.isascii() and ch.isalpha() for ch in text)
+        if one.width <= bw or latin_word or (one.width * 0.75 <= bw and not mixed):
+            # 들어가면 한 줄. 한 글자 체계만 쓰면 25%까지 눌러서 한 줄(영상의 '고원아파트'),
+            # 영문+한자처럼 섞여 있으면 경계에서 두 줄(Gowon / 公寓)
+            one = _old_text(text, c["top"], "big", bw)
+            img.alpha_composite(_g(one, c), (x0 + (bw - one.width) // 2, 6))
+            return
+        for i, part in enumerate(_smart_split(text)):
+            li = _old_text(part.strip(), c["top"], "two", bw)
+            img.alpha_composite(_g(li, c), (x0 + (bw - li.width) // 2, 2 + i * 15))
+    x0 = c.get("box_w", 30) + 2
+    mid = x0 + (192 - x0 - 16) // 2
+    block(start, x0, mid, breaks[0])
+    if start and end:
+        _old_arrow(img, mid + 1, 16, 14, c["arrow"], c["arrow_style"])
+    block(end, mid + 16, 192, breaks[1])
+
+
+def logo_to_led(path, w, h, palette=None, full=False):
+    """사용자가 고른 이미지 → 판 크기에 맞춰 줄이고 3색 LED 색(빨강·초록·주황)으로 바꿈.
+    full=True 이면 풀컬러 판(부산 신형)용: 색은 그대로 두고 어두운 점만 끔"""
+    import numpy as np
+    pal = palette or [(0, 0, 0), OLD_RED, OLD_GREEN, OLD_AMBER]
+    src = Image.open(path).convert("RGBA")
+    bg = Image.new("RGBA", src.size, (0, 0, 0, 255))
+    src = Image.alpha_composite(bg, src).convert("RGB")
+    src.thumbnail((w, h), Image.LANCZOS)
+    a = np.asarray(src).astype(int)
+    if full:
+        q = np.where(a.max(-1, keepdims=True) < 60, 0, a).astype(np.uint8)
+        out = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+        out.alpha_composite(Image.fromarray(q, "RGB").convert("RGBA"), ((w - src.width) // 2, (h - src.height) // 2))
+        return out
+    P = np.array(pal)
+    d = ((a[:, :, None, :] - P[None, None, :, :]) ** 2).sum(-1)
+    q = P[d.argmin(-1)].astype(np.uint8)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    out.alpha_composite(Image.fromarray(q, "RGB").convert("RGBA"), ((w - src.width) // 2, (h - src.height) // 2))
+    return out
+
+
+def _flat_stops(lines):
+    return [s for line in lines for s in line]
+
+
+def tpl_busan_old(r, st):
+    """부산 구형 3색 LED 192×32 — 여러 장(페이지)을 돌려줌. 각 장의 info['duration'] = 표시 시간(ms)"""
+    num = str(r.get("no", "")).strip()
+    c = _old_colors(st)
+    c["box_w"] = _old_box_w(str(r.get("no", "")).strip())
+    rule = kind_style(r.get("kind"), st)
+    pages = []
+
+    def new():
+        return Image.new("RGBA", (OLD_W, OLD_H), (0, 0, 0, 255))
+
+    def add(img, kind):
+        im = img.convert("RGB")
+        im.info["duration"] = OLD_MS[kind]
+        im.info["page_kind"] = kind
+        pages.append(im)
+
+    def big():
+        img = new()
+        if num:
+            color = rule["color"] if rule and not rule["invert"] else c["num"]
+            n = render_num_orig(num, color, 28, OLD_W - 8, kx=1.0, th=100, track=2)
+            if rule and rule["invert"]:
+                n = invert_box(n, rule["color"])
+            elif not rule:
+                n = _g(n, c, "grad_num")
+            img.alpha_composite(n, ((OLD_W - n.width) // 2, (OLD_H - n.height) // 2))
+        add(img, "big")
+
+    ko_lines, en_lines = parse_via(r.get("via", ""))
+    ko, en = _flat_stops(ko_lines), _flat_stops(en_lines)
+    start, end = r.get("start_ko", ""), r.get("end_ko", "")
+    big()
+    for i, stop in enumerate(ko):
+        texts = [stop]
+        if i < len(en) and en[i]:
+            texts += _old_en_parts(en[i], c)        # 긴 영문은 7픽셀로 줄이지 않고 두 화면으로 나눔
+        for text in texts:
+            img = new()
+            _old_numbox(img, num, c, rule)
+            _old_top_row(img, start, end, c)
+            _old_bottom_row(img, text, c)
+            add(img, "via")
+        if i % 2 == 1 and i + 1 < len(ko):      # 정류장 두 개마다 큰 번호 한 번
+            big()
+    logo = (r.get("logo") or "").strip()
+    if logo:
+        lp = Path(logo).expanduser()
+        if lp.exists():
+            add(logo_to_led(lp, OLD_W, OLD_H), "logo")
+        else:
+            WARN.append((f"로고 파일 없음: {logo}", 0))
+    if r.get("slogan", "").strip():
+        img = new()
+        t = _old_text(r["slogan"].strip(), c["top"], "big", OLD_W - 8)
+        img.alpha_composite(_g(t, c), ((OLD_W - t.width) // 2, 6))
+        add(img, "slogan")
+    br = r.get("_br") or {}
+    for sk, ek in (("start_ko", "end_ko"), ("start_en", "end_en"), ("start_ja", "end_ja"), ("start_zh", "end_zh")):
+        a, b = r.get(sk, "").strip(), r.get(ek, "").strip()
+        fa, fb = br.get(sk), br.get(ek)
+        if sk == "start_en" and not (a or b):        # 영문이 비어 있으면 한글에서 자동 변환
+            def auto(k):
+                if br.get(k):                        # '김해|구산동' → Gimhae / Gusan-dong
+                    return tuple(romanize_name(x) for x in br[k])
+                v = r.get(k, "").strip()
+                return romanize_name(v) if v else ""
+            a, b = auto("start_ko"), auto("end_ko")
+            if isinstance(a, tuple):
+                fa, a = a, " ".join(a)
+            if isinstance(b, tuple):
+                fb, b = b, " ".join(b)
+        if sk in ("start_ja", "start_zh") and not (a or b) and not st.get("old_no_auto"):
+            # 일본어·중국어도 비어 있으면 자동 (사전 → 일본어는 가타카나). '김해|구산동'은 나눈 그대로 번역
+            lang = sk[-2:]
+
+            def tr(k):
+                if br.get(k):
+                    parts = tuple(translate_place(x, lang) for x in br[k])
+                    return parts if all(parts) else ""
+                v = r.get(k, "").strip()
+                return translate_place(v, lang) if v else ""
+            ta, tb = tr("start_ko"), tr("end_ko")
+            need_a, need_b = bool(r.get("start_ko", "").strip()), bool(r.get("end_ko", "").strip())
+            if (need_a and not ta) or (need_b and not tb):
+                if lang == "zh" and (need_a or need_b):
+                    WARN.append((f"중문 행선을 몰라서 생략: {r.get('start_ko','')}▶{r.get('end_ko','')} → 기점(중)·종점(중) 칸에 적거나 번역 사전에 추가하세요", 0))
+            else:
+                a, b = ta, tb
+                if isinstance(a, tuple):
+                    fa, a = a, "".join(a)
+                if isinstance(b, tuple):
+                    fb, b = b, "".join(b)
+        if a or b:
+            img = new()
+            _old_numbox(img, num, c, rule)
+            _old_route_page(img, a, b, c, (fa, fb))
+            add(img, "route")
+    seats = seats_text(r)
+    if seats:
+        add(seats_page(seats, OLD_RED, OLD_AMBER), "seats")
+    return pages
+
+
+def seats_text(r):
+    """잔여좌석 칸: 숫자만 남김 (비어 있으면 화면 생략)"""
+    v = str(r.get("seats", "") or "").strip()
+    if v.endswith(".0"):
+        v = v[:-2]
+    v = "".join(ch for ch in v if ch.isdigit())
+    return v[:3]
+
+
+def seats_page(seats, label_color, num_color, w=OLD_W, h=OLD_H):
+    """잔여좌석 화면: 왼쪽 '잔여좌석'(굵게) + 오른쪽 큰 숫자 (경기·부산 좌석버스 영상의 배치)"""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    lab = _old_text("잔여좌석", label_color, "seat", w // 2)
+    n = render_num_orig(seats, num_color, 28, w // 2 - 16, kx=0.85, th=100, track=3, warn=False)
+    gap = 14                                    # 영상: 글자와 숫자가 가까이 붙어 가운데 모임
+    x = (w - (lab.width + gap + n.width)) // 2
+    img.alpha_composite(lab, (x, (h - lab.height) // 2))
+    img.alpha_composite(n, (x + lab.width + gap, (h - n.height) // 2))
+    return img
+
+
+# ───────────────────────── 부산 신형 풀컬러 LED (192×32) ─────────────────────────
+# 영상(부산 2029번 전면 신형 전광판, 99번 측면)을 보고 만든 배치.
+#  화면 순서: [구분+번호] → [번호 + 'OO행' 한 줄] → [번호 + 'OO행' + 작은 경유지] … → 영문 → 잔여좌석 → 문구
+#  번호색: 일반 = 청록빛 하늘색(99번), 급행·좌석 = 빨강→분홍 가로 그라데이션(2029번)
+#  화면이 바뀔 때는 효과 없이 바로 바뀜
+NEW_NUM = (0, 225, 235)        # '구분별 색'일 때 일반 번호 (99번 측면 영상)
+NEW_NUM_WHITE = (255, 255, 255)
+NEW_TEXT = (250, 245, 255)
+NEW_ARROW = (255, 60, 200)
+NEW_YELLOW = (255, 215, 0)
+NEW_PINK = (255, 50, 220)
+NEW_VIA_ARROW = (0, 170, 255)   # 경유지 사이 ▶ : 측면 신형 영상처럼 파랑
+LATIN_BOLD = BASE_DIR / "fonts" / "LiberationSans-Bold.ttf"       # 'Busan is good' (1000번·99번 영상)
+NEW_RED_PINK = [(0.0, (255, 40, 40)), (1.0, (255, 40, 220))]
+NEW_KIND_COLORS = {"심야": (60, 120, 255), "마을": (60, 230, 60), "순환": (255, 150, 0)}
+
+
+def _new_colors(st):
+    raw = st.get("_raw") or {}
+
+    def pick(key, default):
+        v = raw.get(key)
+        return COLORS.get(v) if v and v != "(기본)" and COLORS.get(v) else default
+    return {"num": pick("num_big", NEW_NUM), "top": pick("end", NEW_TEXT), "via": pick("via", NEW_TEXT),
+            "arrow": pick("arrow", NEW_ARROW), "num_custom": raw.get("num_big") not in (None, "", "(기본)"),
+            "express": st.get("new_express") or "흰색"}
+
+
+def _num_fixed_gap(num, color, h, max_w, gap=1):
+    """숫자를 한 자씩 그려서 글자 사이를 정확히 gap칸으로 붙임 (신형 번호: 1칸).
+    넘치면 원래 방식(최근접 압축)으로 판 폭에 맞춤"""
+    import numpy as np
+    parts = []
+    for ch in num:
+        if ch == " ":
+            parts.append(np.zeros((h, max(2, h // 6)), bool)); continue
+        g = render_num_orig(ch, color, h, 10 ** 4, kx=0.95, th=100, track=0, warn=False)
+        m = np.asarray(g)[:, :, 3] > 0
+        xs = np.where(m.any(0))[0]
+        if len(xs):
+            m = m[:, xs.min():xs.max() + 1]
+        if ch == "-":                                   # 붙임표는 숫자 가운데 높이로 최소 폭 유지
+            m = np.asarray(Image.fromarray(m).resize((max(m.shape[1], h // 3), h), Image.NEAREST))
+        parts.append(m)
+    W = sum(p_.shape[1] for p_ in parts) + gap * (len(parts) - 1)
+    out = np.zeros((h, max(1, W)), bool)
+    x = 0
+    for p_ in parts:
+        out[:, x:x + p_.shape[1]] = p_
+        x += p_.shape[1] + gap
+    rgba = np.zeros(out.shape + (4,), np.uint8)
+    rgba[out, :3] = color
+    rgba[out, 3] = 255
+    im = Image.fromarray(rgba, "RGBA")
+    if im.width > max_w:
+        return render_num_orig(num, color, h, max_w, kx=0.95, th=100, track=-2, warn=False, keep_dash=True)
+    return im
+
+
+def _new_num_paint(num, c, kind, st, h=28, max_w=92, track=-2):
+    """번호 그리기 + 색 (기본 흰색). 사용자가 확인한 사진 모양: 높이 28, 굵은 숫자, 숫자 사이 1칸"""
+    n = _num_fixed_gap(num, (255, 255, 255), h, max_w)
+    custom = (st.get("kinds") or {}).get(kind)
+    if custom and (custom.get("color", "(기본)"), bool(custom.get("invert"))) != KIND_DEFAULTS.get(kind, ("(기본)", False)):
+        # 스타일 탭에서 구분 색을 기본값과 다르게 바꿨으면 그것
+        rule = kind_style(kind, st)
+        if rule:
+            n = render_num_orig(num, rule["color"], h, max_w, kx=0.95, th=100, track=track, warn=False)
+            return invert_box(n, rule["color"]) if rule["invert"] else n
+    if c["num_custom"]:
+        return recolor(n, c["num"])
+    mode = c["express"]
+    if mode == "빨강→분홍":
+        return grad_h(n, NEW_RED_PINK)
+    if mode == "구분별 색":
+        if kind in ("급행", "좌석"):
+            return grad_h(n, NEW_RED_PINK)
+        return recolor(n, NEW_KIND_COLORS.get(kind, NEW_NUM))
+    return recolor(n, NEW_NUM_WHITE)                    # 기본: 흰색 번호
+
+
+def recolor(im, color):
+    import numpy as np
+    a = np.asarray(im.convert("RGBA")).copy()
+    a[a[:, :, 3] > 0, :3] = color
+    return Image.fromarray(a, "RGBA")
+
+
+def _dest(end, lang="ko"):
+    end = (end or "").strip()
+    if not end:
+        return ""
+    if lang == "ko":
+        return end if end.endswith("행") else end + "행"
+    return end if end.lower().startswith(("to ", "for ")) else "To " + end
+
+
+def _tiny_chain(stops, color, sep_color, max_w):
+    """작은 글씨(7픽셀) 경유지 줄: 경유지 ▸ 경유지 ▸ 경유지 (▸는 점으로 직접 그림)"""
+    ims = [render_segments_pixel([(s_, color)], 7, 10 ** 4, str(TINY_FONT)) for s_ in stops]
+    sep_w, gap = 3, 3
+    w = sum(i.width for i in ims) + (len(ims) - 1) * (sep_w + 2 * gap)
+    out = Image.new("RGBA", (max(1, w), 7), (0, 0, 0, 0))
+    d = ImageDraw.Draw(out)
+    x = 0
+    for k, im in enumerate(ims):
+        out.alpha_composite(im, (x, 0))
+        x += im.width
+        if k < len(ims) - 1:
+            x += gap
+            d.polygon([(x, 1), (x + sep_w - 1, 3), (x, 5)], fill=sep_color + (255,))
+            x += sep_w + gap
+    return out if out.width <= max_w else squeeze_w(out, max_w)
+
+
+def _spaced(text, color, row, room):
+    """글자를 한 자씩 그려 칸에 고르게 벌려 놓음 (영상: '다 대 포 행')"""
+    chars = [ch for ch in text if not ch.isspace()]
+    if not chars:
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    ims = [_old_text(ch, color, row, 10 ** 4) for ch in chars]
+    tot = sum(i.width for i in ims)
+    if tot > room or len(ims) == 1 or not has_hangul(text):
+        return _old_text(text, color, row, room)
+    avg = tot / len(ims)
+    gap = int(min((room - tot) / (len(ims) - 1), avg * 0.55))
+    h = max(i.height for i in ims)
+    out = Image.new("RGBA", (tot + gap * (len(ims) - 1), h), (0, 0, 0, 0))
+    x = 0
+    for im in ims:
+        out.alpha_composite(im, (x, h - im.height))
+        x += im.width + gap
+    return out
+
+
+def tpl_busan_new(r, st):
+    """부산 신형 풀컬러 LED 192×32 — 여러 장. info['trans'] = 'cut' (효과 없이 바로 바뀜)
+    영상(부산 1000번 급행 전면, 2029번, 99번 측면) 순서:
+      [번호만] → [번호 + 'OO행' 한 줄] → [번호 + 'O O O 행' + 영문] → [… + 중문/일문] → (경유지) → 잔여좌석 → 문구"""
+    num = str(r.get("no", "")).strip()
+    kind = (r.get("kind") or "").strip()
+    c = _new_colors(st)
+    pages = []
+
+    def new():
+        return Image.new("RGBA", (OLD_W, OLD_H), (0, 0, 0, 255))
+
+    def add(img, k, ms=None):
+        im = img.convert("RGB")
+        im.info["duration"] = ms or OLD_MS[k]
+        im.info["page_kind"] = k
+        im.info["trans"] = "cut"       # 신형: 효과 없이 바로 다음 화면으로 (사용자 요청)
+        pages.append(im)
+
+    n_img = _new_num_paint(num, c, kind, st) if num else None
+    x0 = (n_img.width + 6) if n_img else 2
+    room = OLD_W - 1 - x0
+
+    def with_num():
+        img = new()
+        if n_img:
+            img.alpha_composite(n_img, (1, (OLD_H - n_img.height) // 2))
+        return img
+
+    def dest_page(dest):
+        """번호 + 'OO행' 한 줄. 1000번 영상처럼 글자 높이가 번호의 80%쯤(24칸), 획 2칸, 글자 사이를 벌림.
+        길어서 안 들어가면 22칸 → 예전 크기(20칸) 순으로 줄임"""
+        img = with_num()
+        t = None
+        cands = [(dest, row) for row in ("ndest", "ndest2")]
+        if dest.endswith("행") and len(dest) > 2:       # 길면 실제 전광판처럼 '행'을 빼고 크게
+            cands += [(dest[:-1], row) for row in ("ndest", "ndest2")]
+        for dest, row in cands:
+            if has_hangul(dest) or any(needs_cjk(ch) for ch in dest):
+                ims = [_old_text(ch, c["top"], row, 10 ** 4) for ch in dest if not ch.isspace()]
+                tot = sum(i.width for i in ims)
+                if tot <= room:
+                    gap = max(1, min(round(tot / len(ims) * 0.35), (room - tot) // max(1, len(ims) - 1))) if len(ims) > 1 else 0
+                    hh = max(i.height for i in ims)
+                    t = Image.new("RGBA", (tot + gap * (len(ims) - 1), hh), (0, 0, 0, 0))
+                    xx = 0
+                    for im in ims:
+                        t.alpha_composite(im, (xx, hh - im.height))
+                        xx += im.width + gap
+                    break
+            else:
+                one = _old_text(dest, c["top"], row, 10 ** 4)
+                if one.width <= room:
+                    t = one
+                    break
+        if t is None:
+            t = _old_text(dest, c["top"], "big", room)      # dest = '행'을 뺀 이름 (그래도 길면 좁혀서)
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, (OLD_H - t.height) // 2))
+        add(img, "route", 1000)
+
+    def sub_page(dest, sub, ms=1200):
+        """윗줄 'O O O 행'(벌려 씀) + 아랫줄 번역(영문·중문·일문)"""
+        img = with_num()
+        rm, xs = room, x0
+        if not (has_hangul(sub) or any(needs_cjk(ch) for ch in sub)):
+            nat = render_segments([(sub, c["top"])], 12, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold").width
+            if nat * 0.87 > room:                         # 영문이 너무 길면 번호를 빼고 판 전체 폭으로
+                img, rm, xs = new(), OLD_W - 2, 1
+        room_, x0_ = rm, xs
+        if dest.endswith("행") and _old_text(dest, c["top"], "ntop", 10 ** 4).width > room_:
+            dest = dest[:-1]                              # 길면 '행'을 뺌
+        t = _spaced(dest, c["top"], "ntop", room_)
+        img.alpha_composite(t, (x0_ + (room_ - t.width) // 2, 0))
+        v = _old_text(sub, c["top"], "via", 10 ** 4)
+        if v.width > room_ and not (has_hangul(sub) or any(needs_cjk(ch) for ch in sub)):
+            # 긴 영문은 고정폭으로 누르면 못 읽으니 비례폭 굵은 글씨(12칸)로
+            v = render_segments([(sub, c["top"])], 12, room_, font_path=str(LATIN_BOLD), stroke="bold")
+        elif v.width > room_:
+            v = _old_text(sub, c["top"], "via", room_)
+        img.alpha_composite(v, (x0_ + (room_ - v.width) // 2, 19))
+        add(img, "route", ms)
+
+    def via_groups(stops):
+        out, cur = [], []
+        for s_ in stops:
+            if cur and _tiny_chain(cur + [s_], c["via"], c["arrow"], 10 ** 4).width > room:
+                out.append(cur)
+                cur = []
+            cur.append(s_)
+        if cur:
+            out.append(cur)
+        return out
+
+    def via_lines(stops):
+        """경유지를 판 전체 폭(190칸)에 '경유지 ▶ 경유지' 줄로 채움. 두 줄씩 한 화면 → 5개 이상 보임"""
+        tri, gap, W_ = 6, 3, OLD_W - 2
+        ims = [_old_text(s_, c["via"], "nvia2", W_) for s_ in stops]
+        lines, cur, w = [], [], 0
+        for im in ims:
+            add_w = im.width + (tri + 2 * gap if cur else 0)
+            if cur and w + add_w > W_:
+                lines.append(cur)
+                cur, w, add_w = [], 0, im.width
+            cur.append(im)
+            w += add_w
+        if cur:
+            lines.append(cur)
+        out = []
+        for ln in lines:
+            lw = sum(i.width for i in ln) + (len(ln) - 1) * (tri + 2 * gap)
+            li = Image.new("RGBA", (lw, 15), (0, 0, 0, 0))
+            x = 0
+            for k, im in enumerate(ln):
+                li.alpha_composite(im, (x, 15 - im.height))
+                x += im.width
+                if k < len(ln) - 1:
+                    _old_triangle(li, x + gap, 7, 9, NEW_VIA_ARROW)
+                    x += tri + 2 * gap
+            out.append(li)
+        return out
+
+    def via_full_pages(stops):
+        """측면 신형 영상(128-1번)처럼 흰 글자 + 파란 ▶. 두 줄 = 한 화면"""
+        lines = via_lines(stops)
+        for i in range(0, len(lines), 2):
+            img = new()
+            pair = lines[i:i + 2]
+            ys = [0, 17] if len(pair) == 2 else [8]
+            for li, y in zip(pair, ys):
+                img.alpha_composite(li, ((OLD_W - li.width) // 2, y))
+            add(img, "via", 2500)
+
+    def via_page(dest, stops):
+        img = with_num()
+        t = _spaced(dest, c["top"], "ntop", room)
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, 1))
+        if TINY_FONT.exists():
+            v = _tiny_chain(stops, c["via"], c["arrow"], room)
+            img.alpha_composite(v, (x0 + (room - v.width) // 2, 23))
+        add(img, "via")
+
+    if num:                                              # 번호만 크게 (멀리서도 보이게)
+        img = new()
+        n = _new_num_paint(num, c, kind, st, h=30, max_w=OLD_W - 8, track=-2)
+        img.alpha_composite(n, ((OLD_W - n.width) // 2, (OLD_H - n.height) // 2))
+        add(img, "big")
+    ko_lines, en_lines = parse_via(r.get("via", ""))
+    ko = _flat_stops(ko_lines)
+    end_ko = (r.get("end_ko") or "").strip()
+    dest_ko = _dest(end_ko)
+    if dest_ko:
+        dest_page(dest_ko)
+        end_en = (r.get("end_en") or "").strip() or romanize_name(end_ko)
+        end_zh = (r.get("end_zh") or "").strip() or translate_place(end_ko, "zh")
+        end_ja = (r.get("end_ja") or "").strip() or translate_place(end_ko, "ja")
+        if not end_zh:
+            WARN.append((f"중문 행선지를 몰라서 생략: {end_ko} → 종점(중) 칸에 적거나 번역 사전에 추가하세요", 0))
+        shown = set()
+        for sub in (end_en, end_zh, end_ja):              # 다대포행 밑에 영어 → 중국어 → 일본어
+            if sub and sub not in shown:                  # 중국어·일본어 한자가 같으면(多大浦) 한 번만
+                shown.add(sub)
+                sub_page(dest_ko, sub)
+        if st.get("new_via") != "끔" and ko:            # 7픽셀 작은 경유지는 승객이 못 읽어서 없앰          # 기본: 경유지만 두 줄, 한 화면에 5개 이상
+            via_full_pages(ko)
+            en = _flat_stops(en_lines)
+            if en:
+                via_full_pages(en)                       # 영문 경유지도 같은 방식
+    elif r.get("end_en"):
+        dest_page(_dest(r["end_en"], "en"))
+    seats = seats_text(r)
+    if seats:                                            # 신형 잔여좌석: 글자·숫자 모두 흰색
+        add(seats_page(seats, NEW_TEXT, NEW_NUM_WHITE), "seats")
+    logo = (r.get("logo") or "").strip()
+    if logo:
+        lp = Path(logo).expanduser()
+        if lp.exists():
+            add(logo_to_led(lp, OLD_W, OLD_H, full=True), "logo")
+        else:
+            WARN.append((f"로고 파일 없음: {logo}", 0))
+    if r.get("slogan", "").strip():                      # 'Busan is good' : 분홍
+        img = new()
+        t = recolor(_old_text(r["slogan"].strip(), NEW_TEXT, "big", OLD_W - 8), NEW_PINK)
+        img.alpha_composite(t, ((OLD_W - t.width) // 2, (OLD_H - t.height) // 2))
+        add(img, "slogan", 2500)
+    return pages
+
+
 TEMPLATES = {
     "jinmyeong_front_192x160": tpl_jinmyeong_front,
     "jinmyeong_uniform_192x160": tpl_jinmyeong_uniform,
     "simple_front_192x160": tpl_simple_front,
+    "busan_old_192x32 (부산 구형 3색)": tpl_busan_old,
+    "busan_new_192x32 (부산 신형 풀컬러)": tpl_busan_new,
 }
 
 
+LINE_BREAK_KEYS = ("start_ko", "end_ko", "start_en", "end_en", "start_ja", "end_ja", "start_zh", "end_zh")
+
+
+def split_breaks(route):
+    """기점·종점 칸의 '|'(또는 줄바꿈)는 '두 줄일 때 여기서 나눔' 표시.
+    한 줄로 쓰는 곳에는 표시를 지운 글자를, 두 줄 화면에는 나눌 위치를 따로 넘김."""
+    r = dict(route)
+    br = dict(r.get("_br") or {})               # 이미 한 번 나눈 노선이면 그 정보를 유지
+    for k in LINE_BREAK_KEYS:
+        v = str(r.get(k, "") or "")
+        if "|" in v or "\n" in v:
+            parts = [p.strip() for p in v.replace("\n", "|").split("|") if p.strip()]
+            if len(parts) >= 2:
+                br[k] = (parts[0], " ".join(parts[1:]) if k.endswith(("_en",)) else "".join(parts[1:]))
+            sep = " " if k.endswith("_en") else ""
+            r[k] = sep.join(parts)
+    r["_br"] = br
+    return r
+
+
 def render_route(route, style=None):
+    route = split_breaks(route)
     fn = TEMPLATES.get(route.get("template") or "", None) or tpl_jinmyeong_front
     st = resolve_style(style)
     tf, nf = st["text_font"], st["num_font"]
@@ -1166,10 +2021,12 @@ def render_json_page(tpl, page, route, st):
 def render_pages(route, style=None, with_edits=True):
     """노선 → [페이지 이미지...]. 점 편집까지 적용. WARN 에 압축 경고가 쌓임."""
     WARN.clear()
+    route = split_breaks(route)                   # '김해|구산동' 표시는 JSON 판에서도 지움
     tname = route.get("template") or ""
     jt = load_json_templates().get(tname)
     if jt is None:
-        pages = [render_route(route, style)]
+        res = render_route(route, style)
+        pages = res if isinstance(res, list) else [res]
     else:
         render_route({"no": ""}, style)          # 글꼴·획 설정만 적용
         st = resolve_style(style)
@@ -1246,11 +2103,139 @@ def romanize_word(word):
     return "".join(sep[i] + onset[i] + _JUNG[syl[i][1]] + coda[i] for i in range(n))
 
 
+# ───────── 행선지 중국어·일본어 (신형 판 '다대포행' 밑줄) ─────────
+# 1) 노선의 종점(중)·종점(일) 칸  2) ~/BusSignMaker/translate_dict.json  3) 아래 기본 사전
+# 4) 일본어는 그래도 없으면 가타카나로 소리 나는 대로 (다대포 → タデポ). 중국어는 한자를 알 수 없으면 생략.
+TRANS_FILE = APP_DIR / "translate_dict.json"
+TRANS_DEFAULT = {
+    "부산": ("釜山", "釜山"), "다대포": ("多大浦", "多大浦"), "다대포해수욕장": ("多大浦海水浴场", "多大浦海水浴場"),
+    "해운대": ("海云台", "海雲台"), "해운대해수욕장": ("海云台海水浴场", "海雲台海水浴場"),
+    "광안리": ("广安里", "広安里"), "광안리해수욕장": ("广安里海水浴场", "広安里海水浴場"),
+    "송정": ("松亭", "松亭"), "기장": ("机张", "機張"), "서면": ("西面", "西面"), "남포동": ("南浦洞", "南浦洞"),
+    "부산역": ("釜山站", "釜山駅"), "부산진시장": ("釜山镇市场", "釜山鎮市場"), "자갈치": ("札嘎其", "チャガルチ"),
+    "자갈치시장": ("札嘎其市场", "チャガルチ市場"), "사상": ("沙上", "沙上"), "하단": ("下端", "下端"),
+    "동래": ("东莱", "東莱"), "온천장": ("温泉场", "温泉場"), "노포동": ("老圃洞", "老圃洞"), "범어사": ("梵鱼寺", "梵魚寺"),
+    "센텀시티": ("Centum City", "センタムシティ"), "벡스코": ("BEXCO", "BEXCO"), "김해공항": ("金海机场", "金海空港"),
+    "김해": ("金海", "金海"), "구포": ("龟浦", "亀浦"), "덕천": ("德川", "徳川"), "명지": ("鸣旨", "鳴旨"),
+    "녹산": ("菉山", "菉山"), "영도": ("影岛", "影島"), "태종대": ("太宗台", "太宗台"), "감천문화마을": ("甘川文化村", "甘川文化村"),
+    "신라대": ("新罗大学", "新羅大学"), "부산대": ("釜山大学", "釜山大学"), "동아대": ("东亚大学", "東亜大学"),
+    "부경대": ("釜庆大学", "釜慶大学"), "경성대": ("庆星大学", "慶星大学"), "연산": ("莲山", "蓮山"),
+    "수영": ("水营", "水営"), "기장시장": ("机张市场", "機張市場"), "반여동": ("盘如洞", "盤如洞"), "반여4동": ("盘如4洞", "盤如4洞"),
+    "사하구청": ("沙下区厅", "沙下区庁"), "부산시청": ("釜山市厅", "釜山市庁"), "용호동": ("龙湖洞", "龍湖洞"),
+    # 부산 동·지명 추가 (기본 사전은 참고용: 정확한 표기는 칸에 직접 적거나 translate_dict.json에서 고치세요)
+    "범일동": ("凡一洞", "凡一洞"), "구산동": ("龟山洞", "亀山洞"), "좌천동": ("佐川洞", "佐川洞"), "초량": ("草梁", "草梁"), "수정동": ("水晶洞", "水晶洞"), "대연동":
+    ("大渊洞", "大淵洞"), "광안동": ("广安洞", "広安洞"), "민락동": ("民乐洞", "民楽洞"), "재송동": ("栽松洞", "栽松洞"), "반송": ("盘松", "盤松"), "정관": ("鼎冠",
+    "鼎冠"), "장안": ("长安", "長安"), "구서동": ("久瑞洞", "久瑞洞"), "장전동": ("长箭洞", "長箭洞"), "온천동": ("温泉洞", "温泉洞"), "사직동": ("社稷洞", "社稷洞"),
+    "거제동": ("巨堤洞", "巨堤洞"), "연산동": ("莲山洞", "蓮山洞"), "양정": ("杨亭", "楊亭"), "부전동": ("釜田洞", "釜田洞"), "전포동": ("田浦洞", "田浦洞"), "당감동":
+    ("堂甘洞", "堂甘洞"), "개금": ("开琴", "開琴"), "주례": ("周礼", "周礼"), "감전": ("甘田", "甘田"), "학장": ("鹤章", "鶴章"), "엄궁": ("严弓", "厳弓"),
+    "괴정": ("槐亭", "槐亭"), "당리": ("堂里", "堂里"), "신평": ("新平", "新平"), "장림": ("长林", "長林"), "다대동": ("多大洞", "多大洞"), "감천": ("甘川",
+    "甘川"), "송도": ("松岛", "松島"), "남항": ("南港", "南港"), "청학동": ("青鹤洞", "青鶴洞"), "동삼동": ("东三洞", "東三洞"), "금곡": ("金谷", "金谷"), "화명":
+    ("华明", "華明"), "만덕": ("万德", "万徳"), "강서구청": ("江西区厅", "江西区庁"), "금정구청": ("金井区厅", "金井区庁"), "해운대구청": ("海云台区厅", "海雲台区庁"),
+    "중앙동": ("中央洞", "中央洞"), "충무동": ("忠武洞", "忠武洞"), "대신동": ("大新洞", "大新洞"), "서대신동": ("西大新洞", "西大新洞"), "동대신동": ("东大新洞",
+    "東大新洞"), "아미동": ("峨嵋洞", "峨嵋洞"), "영주동": ("瀛州洞", "瀛州洞"), "문현동": ("门岘洞", "門峴洞"), "용당동": ("龙塘洞", "龍塘洞"), "우동": ("佑洞",
+    "佑洞"), "중동": ("中洞", "中洞"), "송정동": ("松亭洞", "松亭洞"), "기장군청": ("机张郡厅", "機張郡庁"), "일광": ("日光", "日光"), "월내": ("月内", "月内"),
+}
+_TRANS_SUFFIX = {"역": ("站", "駅"), "시장": ("市场", "市場"), "대학교": ("大学", "大学"), "해수욕장": ("海水浴场", "海水浴場"),
+                 "공영차고지": ("公营车库", "公営車庫"), "차고지": ("车库", "車庫"), "터미널": ("客运站", "ターミナル"),
+                 "아파트": ("公寓", "アパート"), "시청": ("市厅", "市庁"), "구청": ("区厅", "区庁")}
+
+
+def load_trans_dict():
+    d = {k: {"zh": v[0], "ja": v[1]} for k, v in TRANS_DEFAULT.items()}
+    try:
+        for k, v in json.loads(TRANS_FILE.read_text(encoding="utf-8")).items():
+            if isinstance(v, dict) and not k.startswith("_"):
+                d[k] = {**d.get(k, {}), **v}
+    except Exception:
+        pass
+    return d
+
+
+_V = ["a", "e", "ya", "ye", "o", "e", "yo", "ye", "o", "wa", "we", "we", "yo", "u", "wo", "we", "wi", "yu", "u", "ui", "i"]
+_K5 = {"": "アイウエオ", "k": "カキクケコ", "g": "ガギグゲゴ", "s": "サシスセソ", "t": "タチトゥテト", "d": "ダジドゥデド",
+       "n": "ナニヌネノ", "h": "ハヒフヘホ", "b": "バビブベボ", "p": "パピプペポ", "m": "マミムメモ", "r": "ラリルレロ",
+       "ch": "チャチチュチェチョ", "j": "ジャジジュジェジョ"}
+
+
+def _kana(c, v):
+    def row(cc, i):
+        r_ = _K5[cc]
+        if cc in ("ch", "j"):
+            return [r_[0:2], r_[2], r_[3:5], r_[5:7], r_[7:9]][i]
+        if cc in ("t", "d"):
+            return [r_[0], ("ティ" if cc == "t" else "ディ"), r_[2:4], r_[4], r_[5]][i]
+        return r_[i]
+    idx = {"a": 0, "i": 1, "u": 2, "e": 3, "o": 4}
+    if v in idx:
+        return row(c, idx[v])
+    if v.startswith("y"):                    # 야·유·요·예
+        base = {"ya": "ャ", "yu": "ュ", "yo": "ョ", "ye": "ェ"}[v]
+        if c in ("", ):
+            return {"ya": "ヤ", "yu": "ユ", "yo": "ヨ", "ye": "イェ"}[v]
+        if c in ("ch", "j"):
+            return row(c, {"ya": 0, "yu": 2, "yo": 4, "ye": 3}[v])
+        return row(c, 1) + base
+    if v.startswith("w"):                    # 와·워·웨·위
+        if c == "":
+            return {"wa": "ワ", "wo": "ウォ", "we": "ウェ", "wi": "ウィ"}[v]
+        return row(c, 2) + {"wa": "ァ", "wo": "ォ", "we": "ェ", "wi": "ィ"}[v]
+    if v == "ui":
+        return row(c, 2) + "イ"
+    return row(c, 0)
+
+
+def hangul_to_katakana(text):
+    """한글 → 가타카나 (소리 나는 대로, 첫소리 ㄱㄷㅂㅈ은 맑은소리: 부산 → プサン)"""
+    on = ["k", "k", "n", "t", "t", "r", "m", "p", "p", "s", "s", "", "ch", "ch", "ch", "k", "t", "p", "h"]
+    voiced = {"k": "g", "t": "d", "p": "b", "ch": "j"}
+    tail = {1: "ク", 2: "ク", 3: "ク", 4: "ン", 5: "ン", 6: "ン", 7: "ッ", 8: "ル", 9: "ル", 10: "ル", 11: "ル", 12: "ル",
+            13: "ル", 14: "ル", 15: "ル", 16: "ム", 17: "プ", 18: "プ", 19: "ッ", 20: "ッ", 21: "ン", 22: "ッ", 23: "ッ",
+            24: "ク", 25: "ッ", 26: "プ", 27: "ッ"}
+    out, prev_vowel = "", False
+    for ch in text:
+        o = ord(ch) - 0xAC00
+        if not 0 <= o < 11172:
+            out += ch
+            prev_vowel = False
+            continue
+        L, V, T = o // 588, (o % 588) // 28, o % 28
+        c = on[L]
+        if prev_vowel and L in (0, 3, 7, 12):        # 가운데 오는 ㄱㄷㅂㅈ은 흐린소리 (해운대 → ヘウンデ)
+            c = voiced[c]
+        out += _kana(c, _V[V])
+        if T:
+            out += tail.get(T, "")
+        prev_vowel = T in (0, 4, 8, 16, 21)          # 모음·ㄴ·ㄹ·ㅁ·ㅇ 뒤
+    return out
+
+
+def translate_place(name, lang):
+    """행선지 → 중국어(lang='zh')·일본어('ja'). 모르면 일본어는 가타카나, 중국어는 ''"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    d = load_trans_dict()
+    if name in d and d[name].get(lang):
+        return d[name][lang]
+    li = 0 if lang == "zh" else 1
+    for suf in sorted(_TRANS_SUFFIX, key=len, reverse=True):
+        if name.endswith(suf) and len(name) > len(suf):
+            stem = name[: -len(suf)]
+            if stem in d and d[stem].get(lang):
+                return d[stem][lang] + _TRANS_SUFFIX[suf][li]
+            if lang == "ja":
+                return hangul_to_katakana(stem) + _TRANS_SUFFIX[suf][1]
+            return ""
+    return hangul_to_katakana(name) if lang == "ja" else ""
+
+
 ROMAN_FILE = APP_DIR / "romanize_dict.json"
 ROMAN_DEFAULT = {
     "_설명": "exact = 이름 그대로 바꿈, suffix = 끝말 바꿈 (긴 것부터 적용). 자유롭게 고치세요.",
     "exact": {"서울역": "Seoul Station", "부산역": "Busan Station", "서면": "Seomyeon"},
-    "suffix": {"환승센터": " Transfer Center", "버스터미널": " Bus Terminal", "터미널": " Terminal",
+    "suffix": {"관광단지": " Tourist Complex", "공영차고지": " Bus Garage", "차고지": " Garage",
+               "산업단지": " Industrial Complex", "산단": " Industrial Complex", "의학원": " Medical Center",
+               "환승센터": " Transfer Center", "버스터미널": " Bus Terminal", "터미널": " Terminal",
                "역": " Stn", "입구": " Entrance", "사거리": " Intersection", "삼거리": " Junction",
                "교차로": " Intersection", "시장": " Market", "공원": " Park", "병원": " Hospital",
                "대학교": " Univ.", "대학": " Univ.", "초등학교": " Elementary School", "중학교": " Middle School",
@@ -1295,6 +2280,10 @@ def romanize_name(name, dic=None):
     for word in name.split():
         if word in dic["exact"]:
             parts.append(dic["exact"][word]); continue
+        if len(word) >= 2 and word[-1] in "동리읍면" and re.fullmatch(r"[가-힣]+", word):
+            # 행정구역 단위는 붙임표 (국어의 로마자 표기법 제5항): 구산동 → Gusan-dong
+            parts.append(_cap(romanize_word(word[:-1])) + "-" + romanize_word(word[-1]))
+            continue
         tokens = re.findall(r"[가-힣]+|[0-9]+|[^가-힣0-9]+", word)
         buf = ""
         for i, tk in enumerate(tokens):
@@ -1368,11 +2357,12 @@ def file_names(route, n_pages, pattern="{no}_{no}"):
     vals = _Missing({k: safe_name(v) for k, v in route.items() if isinstance(v, str)})
     vals["no"] = safe_name(route.get("no", "")) or "noname"
     names = []
+    wd = len(str(n_pages))          # 10장 이상이면 01, 02… (정렬 순서가 맞도록)
     for i in range(n_pages):
-        vals["page"] = str(i + 1)
+        vals["page"] = str(i + 1).zfill(wd)
         base = pattern.format_map(vals)
         if n_pages > 1 and "{page}" not in pattern:
-            base += f"_{i + 1}"
+            base += f"_{str(i + 1).zfill(wd)}"
         names.append((base or "noname") + ".bmp")
     return names
 
@@ -1450,10 +2440,60 @@ def generate_all(routes, style, settings, progress=None):
             progress(i + 1, len(routes))
     return n, warns
 
+
+# ───────────────────────── LED 모양 미리보기 · 움직이는 GIF ─────────────────────────
+def led_look(img, z=6, glow=True):
+    """점 하나를 둥근 LED로 그림. 꺼진 점은 어둡게 보여서 실제 전광판처럼 보임"""
+    import numpy as np
+    a = np.asarray(img.convert("RGB")).astype(np.float32)
+    h, w, _ = a.shape
+    yy, xx = np.mgrid[0:z, 0:z]
+    r = (xx - (z - 1) / 2) ** 2 + (yy - (z - 1) / 2) ** 2
+    dot = (r <= (z * 0.42) ** 2).astype(np.float32)
+    big = np.repeat(np.repeat(a, z, 0), z, 1)
+    lit = (big.max(2, keepdims=True) > 30).astype(np.float32)
+    mask = np.tile(dot, (h, w))[..., None]
+    off = np.array([38, 30, 28], np.float32)
+    out = np.where(lit > 0, big, off) * mask + (1 - mask) * np.array([12, 10, 10], np.float32)
+    im = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+    if glow:
+        from PIL import ImageFilter
+        halo = Image.fromarray(np.clip(big * lit, 0, 255).astype(np.uint8), "RGB").filter(ImageFilter.GaussianBlur(z * 0.7))
+        im = Image.blend(im, Image.fromarray(np.maximum(np.asarray(im), np.asarray(halo) // 2).astype(np.uint8)), 0.6)
+    return im
+
+
+def page_duration(img, default=1000):
+    return int(img.info.get("duration", default))
+
+
+def anim_frames(pages, scroll_steps=6, band=18, step_ms=50):
+    """페이지 → 재생 프레임 [(이미지, ms)].
+    부산 구형·신형 모두 넘김 효과 없이(PPT 전환 없음처럼) 바로 다음 화면으로 바뀜."""
+    return [(p, page_duration(p)) for p in pages]
+
+
+def gif_frames(pages, z=4, led=True, scroll_steps=6):
+    out = []
+    for f, ms in anim_frames(pages, scroll_steps):
+        out.append((led_look(f, z) if led else f.resize((f.width * z, f.height * z), Image.NEAREST), ms))
+    return out
+
+
+def save_gif(pages, path, z=4, led=True):
+    fr = gif_frames(pages, z, led)
+    if not fr:
+        return 0
+    ims = [f.convert("P", palette=Image.Palette.ADAPTIVE, colors=128) for f, _ in fr]
+    ims[0].save(path, save_all=True, append_images=ims[1:], duration=[ms for _, ms in fr], loop=0, optimize=False, disposal=1)
+    return len(ims)
+
 # ───────────────────────── 엑셀 ─────────────────────────
 XL_COLS = [("no", "번호"), ("start_ko", "기점(한)"), ("end_ko", "종점(한)"),
            ("start_en", "기점(영)"), ("end_en", "종점(영)"), ("via", "경유지"),
-           ("template", "템플릿"), ("kind", "구분")]
+           ("template", "템플릿"), ("kind", "구분"),
+           ("start_ja", "기점(일)"), ("end_ja", "종점(일)"), ("start_zh", "기점(중)"), ("end_zh", "종점(중)"),
+           ("slogan", "문구"), ("logo", "로고 이미지"), ("seats", "잔여좌석")]
 
 
 SAMPLE_ROUTES = [
@@ -1478,6 +2518,30 @@ SAMPLE_ROUTES = [
     ("1004", "", "", "", "", "", "rear_64x32 (후면 번호)", "일반", "후면 번호판 64x32"),
     ("1001", "신평", "송정", "Sinpyeong", "Songjeong",
      "", "front_192x32 (전면 한 줄, 한/영 2장)", "순환", "전면 한 줄판 192x32, 순환은 주황"),
+    ("37", "금정공영차고지", "고원아파트", "Geumjeong Bus Garage", "Gowon APT.",
+     "노포동터미널,월평삼거리,정관,좌천,임랑삼거리\nNopo-dong Bus Term.,Wolpyeong Samgeori,Jeonggwan,Jwacheon,Imnang Samgeori",
+     "busan_old_192x32 (부산 구형 3색)", "일반",
+     "부산 구형 3색 LED 192x32: 큰 번호 → 경유지(한/영 교대) → 행선(한/영/일/중). 미리보기 [▶ 재생]",
+     {"start_ja": "金井コン ヨン・チャゴジ", "end_ja": "Gowonアパート", "start_zh": "金井 公營車庫", "end_zh": "Gowon公寓"}),
+    ("187", "반송", "대룡마을", "Bansong", "Daeryong Village",
+     "원자력의학원,장안산단,명례산단\nInstitute of radiological & medical sciences,Jang-an Industrial Complex,Myeongnye Industrial Complex",
+     "busan_old_192x32 (부산 구형 3색)", "일반",
+     "긴 영문 경유지는 두 화면으로 나눠 읽기 쉽게. '로고 이미지' 칸에 가진 이미지 파일을 넣으면 한 장면으로 들어감", {}),
+    ("99", "남포동", "부산진시장", "Nampo-dong", "Busanjin Market",
+     "충무교차로,시청,서면,범내골\nChungmu Intersection,City Hall,Seomyeon,Beomnaegol",
+     "busan_new_192x32 (부산 신형 풀컬러)", "일반",
+     "부산 신형 풀컬러 LED: 큰 번호 → 번호 + 'OO행' → 'O O 행' + 영문 → 작은 경유지 → 문구(분홍)",
+     {"slogan": "Busan is good"}),
+    ("2029", "녹산", "해운대", "Noksan", "Haeundae",
+     "명지,하단,괴정,서면,센텀시티\nMyeongji,Hadan,Goejeong,Seomyeon,Centum City",
+     "busan_new_192x32 (부산 신형 풀컬러)", "급행",
+     "신형: 흰 번호 → 번호+'OO행' → 'O O 행'+영문·중문 → 효과 없이 바로 바뀜. '잔여좌석' 칸에 숫자를 넣으면 잔여좌석 화면 추가",
+     {"seats": "24", "slogan": "Busan is good"}),
+    ("2000", "녹산", "해운대", "Noksan", "Haeundae",
+     "명지,하단,서면\nMyeongji,Hadan,Seomyeon",
+     "busan_old_192x32 (부산 구형 3색)", "일반",
+     "구형 3색에도 잔여좌석 화면(빨간 '잔여좌석' + 주황 숫자)을 넣을 수 있음",
+     {"seats": "17"}),
 ]
 
 
@@ -1488,8 +2552,11 @@ def make_sample_excel(path):
     ws = wb.active
     ws.title = "노선"
     ws.append([c[1] for c in XL_COLS] + ["설명(읽지 않음)"])
+    base_keys = ["no", "start_ko", "end_ko", "start_en", "end_en", "via", "template", "kind"]
     for row in SAMPLE_ROUTES:
-        ws.append(list(row))
+        d = dict(zip(base_keys, row[:8]))
+        d.update(row[9] if len(row) > 9 else {})
+        ws.append([d.get(k, "") for k, _ in XL_COLS] + [row[8]])
     head = PatternFill("solid", fgColor="FFE699")
     for c in ws[1]:
         c.font = Font(bold=True)
@@ -1497,8 +2564,10 @@ def make_sample_excel(path):
     for row in ws.iter_rows(min_row=2):
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
-    for c, w in zip("ABCDEFGHI", (8, 16, 16, 16, 22, 46, 30, 7, 44)):
-        ws.column_dimensions[c].width = w
+    from openpyxl.utils import get_column_letter
+    widths = [8, 16, 16, 16, 22, 46, 30, 7, 14, 14, 14, 14, 12, 14, 9, 44]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "B2"
     g = wb.create_sheet("사용법")
     for line in [
@@ -1508,8 +2577,11 @@ def make_sample_excel(path):
         ["· 번호: 행선판에 나올 노선 번호 (숫자·하이픈은 원본형 번호 글꼴, 한글이 섞이면 일반 글꼴)"],
         ["· 기점/종점(한·영): 공백이 있으면 두 줄로 나뉘고, 짧으면 한 줄로 크게 나옵니다."],
         ["· 경유지: 쉼표 = 정류장, 줄바꿈(Alt+Enter / 맥은 ⌃⌥Enter) = 줄. 한글 줄 다음에 영문 줄."],
-        ["· 템플릿: jinmyeong_front_192x160 / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
+        ["· 템플릿: jinmyeong_front_192x160 / busan_old_192x32 (부산 구형 3색) / busan_new_192x32 (부산 신형 풀컬러) / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
         ["· 구분: 일반 / 급행 / 좌석 / 심야 / 마을 / 순환 (색·반전은 프로그램의 스타일 탭에서 바꿈)"],
+        ["· 기점/종점(일·중), 문구, 로고 이미지: 부산 구형 3색 템플릿(busan_old_192x32)의 행선 화면·문구 화면·로고 화면에 쓰임 (비워 두면 그 화면은 생략)"],
+        ["· 로고 이미지: PNG·BMP·JPG 파일 경로. 판 크기에 맞춰 줄여 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈)."],
+        ["· 잔여좌석: 숫자(예: 24)를 넣으면 부산 구형·신형 템플릿에 '잔여좌석 24' 화면이 추가됩니다. 비워 두면 생략."],
         ["· 영문 칸을 비워 두고 불러온 뒤 [편집 탭 → 모든 노선 채우기]를 누르면 자동으로 채워집니다."],
         ["· '설명' 열처럼 제목이 다른 열은 무시됩니다."],
     ]:
@@ -1532,8 +2604,9 @@ def export_excel(path, routes):
     for row in ws.iter_rows(min_row=2):
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
-    for c, w in zip("ABCDEFGH", (8, 18, 14, 16, 14, 50, 26, 8)):
-        ws.column_dimensions[c].width = w
+    from openpyxl.utils import get_column_letter
+    for i, w in enumerate([8, 18, 14, 16, 14, 50, 26, 8, 14, 14, 14, 14, 12, 14, 9], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
     wb.save(path)
 
 
@@ -1572,6 +2645,7 @@ def open_folder(path):
 
 # ───────────────────────── GUI ─────────────────────────
 PEN_COLORS = ["흰색", "노랑", "빨강", "초록", "주황", "하늘", "끄기(검정)", "원래대로"]
+EXTRA_FIELDS = [("start_ja", "기점(日)"), ("end_ja", "종점(日)"), ("start_zh", "기점(中)"), ("end_zh", "종점(中)")]
 GLYPH_SIZES_TEXT = {"14 · 두 줄 기점/종점": (14, 13, 7), "24 · 한 줄 한글 종점": (24, 23, 12),
                     "13 · 영문 한 줄 / 경유지": (13, 13, 7), "11 · 작은 글자": (11, 11, 6), "9 · 아주 작은 글자": (9, 9, 5)}
 GLYPH_SIZES_NUM = {"22 · 큰 번호": 22, "19 · 작은 번호": 19, "24 · 후면 번호": 24}
@@ -1662,8 +2736,36 @@ def run_gui():
     tpl_var = tk.StringVar(value="jinmyeong_front_192x160")
     tpl_cb = ttk.Combobox(tab_edit, textvariable=tpl_var, values=all_template_names(), state="readonly", width=30)
     tpl_cb.grid(row=8, column=1, sticky="we", pady=2)
+    xf = ttk.LabelFrame(tab_edit, text="추가 칸 — 부산 구형 3색 / 신형 풀컬러 템플릿", padding=6)
+    xf.grid(row=9, column=0, columnspan=2, sticky="we", pady=(8, 0))
+    for i, (k, label) in enumerate(EXTRA_FIELDS):
+        ttk.Label(xf, text=label).grid(row=i // 2, column=(i % 2) * 2, sticky="e", padx=2, pady=1)
+        v = tk.StringVar()
+        ttk.Entry(xf, textvariable=v, width=13).grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="we", pady=1)
+        vars_[k] = v
+    ttk.Label(xf, text="문구").grid(row=2, column=0, sticky="e", padx=2)
+    vars_["slogan"] = tk.StringVar()
+    ttk.Entry(xf, textvariable=vars_["slogan"], width=13).grid(row=2, column=1, sticky="we", pady=1)
+    ttk.Label(xf, text="잔여좌석").grid(row=2, column=2, sticky="e", padx=2)
+    vars_["seats"] = tk.StringVar()
+    ttk.Entry(xf, textvariable=vars_["seats"], width=13).grid(row=2, column=3, sticky="we", pady=1)
+    ttk.Label(xf, text="로고 이미지").grid(row=3, column=0, sticky="e", padx=2)
+    vars_["logo"] = tk.StringVar()
+    ttk.Entry(xf, textvariable=vars_["logo"], width=13).grid(row=3, column=1, columnspan=2, sticky="we", pady=1)
+
+    def pick_logo():
+        p = filedialog.askopenfilename(title="로고 이미지 (PNG·BMP·JPG)",
+                                       filetypes=[("이미지", "*.png *.bmp *.jpg *.jpeg *.gif"), ("모든 파일", "*.*")])
+        if p:
+            vars_["logo"].set(p)
+
+    ttk.Button(xf, text="찾기…", width=5, command=pick_logo).grid(row=3, column=3, sticky="w")
+    ttk.Label(xf, text="로고는 판 크기에 맞춰 줄여 한 장면으로 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈). "
+                       "잔여좌석에 숫자를 넣으면 '잔여좌석 24' 화면이 추가됩니다. "
+                       "기점·종점에 '김해|구산동'처럼 | 를 넣으면 두 줄 화면에서 그 자리에서 줄을 바꿉니다.",
+              foreground="gray", wraplength=360, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
     rom_frame = ttk.LabelFrame(tab_edit, text="영문 자동 변환 (국어의 로마자 표기법 + 사전)", padding=6)
-    rom_frame.grid(row=9, column=0, columnspan=2, sticky="we", pady=(10, 0))
+    rom_frame.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8, 0))
     rom_over = tk.BooleanVar(value=False)
     ttk.Checkbutton(rom_frame, text="이미 적힌 영문도 덮어쓰기", variable=rom_over).pack(anchor="w")
     rf2 = ttk.Frame(rom_frame)
@@ -1677,7 +2779,10 @@ def run_gui():
         r_, c_ = divmod(i, 2)
         ttk.Label(sf, text=label).grid(row=r_, column=c_ * 2, sticky="e", padx=3, pady=2)
         values = (ARROW_SHAPES if k == "arrow_shape" else ALIGNS if k == "align"
-                  else list(WEIGHTS) if k == "weight" else list(NUM_WEIGHTS) if k == "num_weight" else list(COLORS))
+                  else list(WEIGHTS) if k == "weight" else list(NUM_WEIGHTS) if k == "num_weight"
+                  else OLD_BOX_STYLES if k == "old_box" else OLD_GRAD_STYLES if k == "old_grad"
+                  else OLD_ARROW_STYLES if k == "old_arrow" else NEW_VIA_STYLES if k == "new_via"
+                  else NEW_EXPRESS_STYLES if k == "new_express" else list(COLORS))
         v = tk.StringVar(value="(기본)")
         ttk.Combobox(sf, textvariable=v, values=values, state="readonly", width=10).grid(
             row=r_, column=c_ * 2 + 1, sticky="w", pady=2)
@@ -1789,6 +2894,10 @@ def run_gui():
     ttk.Radiobutton(pctl, text="점 편집", variable=mode_var, value="편집").pack(side="left")
     pen_var = tk.StringVar(value="흰색")
     ttk.Combobox(pctl, textvariable=pen_var, values=PEN_COLORS, width=9, state="readonly").pack(side="left", padx=(4, 4))
+    led_var = tk.BooleanVar(value=bool(settings.get("led_look", True)))
+    ttk.Checkbutton(pctl, text="LED 모양", variable=led_var).pack(side="left", padx=(8, 0))
+    play_btn = ttk.Button(pctl, text="▶ 재생", width=7)
+    play_btn.pack(side="left", padx=(6, 0))
     cmp_var = tk.BooleanVar(value=False)
     ttk.Checkbutton(pctl, text="원본 겹쳐보기", variable=cmp_var).pack(side="left", padx=(8, 0))
     cwrap = ttk.Frame(pv)
@@ -1947,6 +3056,8 @@ def run_gui():
     def refresh_preview(*_):
         if S["loading"]:
             return
+        if S.get("play_job"):
+            stop_play()
         r = cur()
         if r is None:
             canvas.itemconfig(img_item, image="")
@@ -1977,7 +3088,10 @@ def run_gui():
                 extra = f"  |  비교 불가: {e}"
         else:
             legend.config(text="점 편집: 왼쪽 클릭·드래그 = 칠하기, 오른쪽 클릭 = 원래대로" if mode_var.get() == "편집" else "")
-        big = img.resize((img.width * z, img.height * z), Image.NEAREST)
+        if led_var.get() and mode_var.get() != "편집" and not (cmp_var.get() and S["cmp_img"] is not None) and z >= 2:
+            big = led_look(img, z)                    # 사진처럼: 둥근 LED 점 + 빛 번짐
+        else:
+            big = img.resize((img.width * z, img.height * z), Image.NEAREST)
         if mode_var.get() == "편집" and z >= 3:     # 편집할 때는 격자를 얇게 표시
             d = ImageDraw.Draw(big)
             for x in range(0, big.width, z):
@@ -1992,6 +3106,51 @@ def run_gui():
                  f"{'  |  편집한 점 ' + str(len((r.get('edits') or {}).get(str(S['page']), {}))) + '개' if (r.get('edits') or {}).get(str(S['page'])) else ''}{extra}")
         ws = [w for w in S.get("warns", []) if w[1] > 0]
         warn_var.set("⚠ 압축됨: " + " / ".join(f"{t} ({ratio * 100:.0f}%)" for t, ratio in ws) if ws else "")
+
+    S["play_job"] = None
+
+    def stop_play():
+        if S.get("play_job"):
+            root.after_cancel(S["play_job"])
+        S["play_job"] = None
+        play_btn.config(text="▶ 재생")
+
+    def toggle_play():
+        if S.get("play_job"):
+            stop_play(); refresh_preview(); return
+        pages = S.get("pages") or []
+        if not pages:
+            return
+        frames = anim_frames(pages)
+        z = zoom_now(pages[0].width, pages[0].height)
+        led = led_var.get()
+        cache = {}
+        play_btn.config(text="■ 정지")
+
+        def step(i):
+            f, ms = frames[i % len(frames)]
+            key = i % len(frames)
+            if key not in cache:
+                cache[key] = ImageTk.PhotoImage(led_look(f, z) if led else f.resize((f.width * z, f.height * z), Image.NEAREST))
+            canvas.itemconfig(img_item, image=cache[key])
+            S["play_job"] = root.after(ms, lambda: step(i + 1))
+
+        step(0)
+
+    play_btn.config(command=toggle_play)
+
+    def save_gif_cmd():
+        r = cur()
+        if r is None:
+            return
+        p = filedialog.asksaveasfilename(defaultextension=".gif", initialfile=f"{safe_name(r.get('no') or 'noname')}.gif",
+                                         filetypes=[("GIF", "*.gif")])
+        if not p:
+            return
+        pages = render_pages(r, current_style())
+        z = 4 if pages[0].width <= 192 else 3
+        n = save_gif(pages, p, z=z, led=led_var.get())
+        status.set(f"GIF 저장: {p} ({n}프레임, LED 모양 {'켬' if led_var.get() else '끔'})")
 
     def on_form_change(*_):
         if S["loading"]:
@@ -2613,13 +3772,16 @@ def run_gui():
     m_out.add_command(label="전체 생성", command=save_all)
     m_out.add_command(label="출력 폴더 열기", command=lambda: open_folder(out_dir()))
     m_out.add_command(label="USB·폴더로 복사…", command=copy_usb)
+    m_out.add_separator()
+    m_out.add_command(label="움직이는 GIF로 저장 (LED 모양)…", command=save_gif_cmd)
     menubar.add_cascade(label="출력", menu=m_out)
     root.config(menu=menubar)
 
     for text, cmd in [("열기", open_project), ("저장", save_project_cmd), ("엑셀 불러오기", load_xl),
                       ("현재 저장(BMP)", save_current), ("전체 생성", save_all),
                       ("출력폴더 열기", lambda: open_folder(out_dir())), ("USB로 복사", copy_usb),
-                      ("원본 비교", load_compare), ("글자 보정", glyph_editor), ("↶", undo), ("↷", redo)]:
+                      ("GIF 저장", save_gif_cmd), ("원본 비교", load_compare), ("글자 보정", glyph_editor),
+                      ("↶", undo), ("↷", redo)]:
         ttk.Button(bar, text=text, command=cmd, width=3 if len(text) == 1 else None).pack(side="left", padx=2)
 
     for seq, fn in [("o", open_project), ("s", save_project_cmd), ("z", undo), ("d", dup_route)]:
@@ -2646,6 +3808,7 @@ def run_gui():
     canvas.bind("<Configure>", on_canvas_resize)
     page_var.trace_add("write", on_page)
     mode_var.trace_add("write", refresh_preview)
+    led_var.trace_add("write", lambda *_: (settings.update(led_look=bool(led_var.get())), refresh_preview()))
     cmp_var.trace_add("write", lambda *_: (load_compare() if cmp_var.get() and S["cmp_img"] is None else refresh_preview()))
 
     def on_close():
@@ -2684,9 +3847,20 @@ SELFTEST_ROUTES = [
      "end_en": "Haeundae Beach", "via": "괴정역,대티역,서면\n부전역,연산역\nGoejeong,Daeti,Seomyeon\nBujeon,Yeonsan"},
     {"no": "7-12", "start_ko": "괴정", "end_ko": "다대포", "start_en": "Goejeong", "end_en": "Dadaepo",
      "via": "", "template": "simple_front_192x160"},
+    {"no": "37", "start_ko": "금정공영차고지", "end_ko": "고원아파트", "start_en": "Geumjeong Bus Garage",
+     "end_en": "Gowon APT.", "start_ja": "金井コン ヨン・チャゴジ", "end_ja": "Gowonアパート",
+     "start_zh": "金井 公營車庫", "end_zh": "Gowon公寓",
+     "via": "노포동터미널,월평삼거리\nNopo-dong Bus Term.,Institute of radiological & medical sciences",
+     "template": "busan_old_192x32 (부산 구형 3색)"},
+    {"no": "99", "start_ko": "남포동", "end_ko": "부산진시장", "start_en": "Nampo-dong", "end_en": "Busanjin Market",
+     "via": "충무교차로,시청,서면,범내골\nChungmu Intersection,City Hall,Seomyeon,Beomnaegol",
+     "seats": "24", "slogan": "Busan is good", "template": "busan_new_192x32 (부산 신형 풀컬러)"},
+    {"no": "2029", "start_ko": "녹산", "end_ko": "해운대", "start_en": "Noksan", "end_en": "Haeundae", "kind": "급행",
+     "via": "명지,하단,괴정,서면,센텀시티\nMyeongji,Hadan,Goejeong,Seomyeon,Centum City",
+     "slogan": "Busan is good", "template": "busan_new_192x32 (부산 신형 풀컬러)"},
 ]
 SELFTEST_STYLES = [{}, {"num_weight": "균일 2픽셀", "arrow_shape": "→"}, {"num_weight": "균일 3픽셀"}]
-SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff'}  # 검증 완료된 기준 이미지 해시
+SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '37#0': '95a7f5d972e3aead', '99#0': 'ecea271bbd92a6b4', '2029#0': '01386d76aaf6f832', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '37#1': '95a7f5d972e3aead', '99#1': 'ecea271bbd92a6b4', '2029#1': '01386d76aaf6f832', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff', '37#2': '95a7f5d972e3aead', '99#2': 'ecea271bbd92a6b4', '2029#2': '01386d76aaf6f832'}  # 검증 완료된 기준 이미지 해시
 
 
 def selftest_hashes():
@@ -2697,7 +3871,8 @@ def selftest_hashes():
     for si, st in enumerate(SELFTEST_STYLES):
         for r in SELFTEST_ROUTES:
             img = render_route(r, st)
-            out[f"{r['no']}#{si}"] = hashlib.sha256(img.tobytes()).hexdigest()[:16]
+            data = b"".join(p.tobytes() for p in img) if isinstance(img, list) else img.tobytes()
+            out[f"{r['no']}#{si}"] = hashlib.sha256(data).hexdigest()[:16]
     GLYPHS.update(saved)
     return out
 

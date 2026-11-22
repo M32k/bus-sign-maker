@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 APP="BusSignMaker"
 DISPLAY_NAME="노선이미지 생성기"
-VERSION="2.1"
+VERSION="2.2"
 
 echo "▶ 1/5  tkinter 되는 파이썬 찾는 중…"
 PY="${PY_OVERRIDE:-}"     # 자동 빌드(GitHub Actions)에서는 파이썬 경로를 직접 지정
