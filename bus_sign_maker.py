@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.3 (2026-11-24)"
+APP_VERSION = "2.3.1 (2026-11-24)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -2027,6 +2027,8 @@ def render_pages(route, style=None, with_edits=True):
     if jt is None:
         res = render_route(route, style)
         pages = res if isinstance(res, list) else [res]
+        if not pages:                             # 내용이 하나도 없는 노선: 빈 화면 1장 (미리보기·저장이 깨지지 않게)
+            pages = [Image.new("RGB", (OLD_W, OLD_H))]
     else:
         render_route({"no": ""}, style)          # 글꼴·획 설정만 적용
         st = resolve_style(style)
@@ -2803,6 +2805,43 @@ def recolor_tk(widget, P, F, keep=()):
                 pass
 
 
+def flow_layout(frame, gap_y=4):
+    """frame 안에 pack 해 둔 위젯들을 창 폭에 맞춰 여러 줄로 감싸 배치 (좁은 창에서 버튼이 잘리지 않게)"""
+    import tkinter as tk
+    items = []
+    for w in frame.pack_slaves():
+        info = w.pack_info()
+        px = info.get("padx", 0)
+        px = px if isinstance(px, (tuple, list)) else (px, px)
+        items.append((w, int(px[0]), int(px[1]), w.winfo_class() == "TSeparator"))
+        w.pack_forget()
+    state = {"w": 0}
+
+    def layout(_=None):
+        W = frame.winfo_width()
+        if W <= 1 or W == state["w"]:
+            return
+        state["w"] = W
+        rowh = max([w.winfo_reqheight() for w, *_ in items if not _[2]] or [24])
+        x = y = 0
+        for w, l, r, sep in items:
+            ww = 1 if sep else w.winfo_reqwidth()
+            if x > 0 and x + l + ww + r > W:
+                x, y = 0, y + rowh + gap_y
+                if sep:                     # 줄 맨 앞의 구분선은 숨김
+                    w.place_forget()
+                    continue
+            if sep:
+                w.place(x=x + l, y=y + 4, width=1, height=rowh - 8)
+            else:
+                w.place(x=x + l, y=y + (rowh - w.winfo_reqheight()) // 2)
+            x += l + ww + r
+        frame.configure(height=y + rowh)
+    frame.bind("<Configure>", layout)
+    frame.configure(height=max([w.winfo_reqheight() for w, *_ in items] or [24]))
+    return layout
+
+
 def run_gui():
     import copy
     import shutil
@@ -2847,7 +2886,7 @@ def run_gui():
     ttk.Label(brand, text="노선이미지 생성기", style="Brand.TLabel").pack(anchor="w")
     ttk.Label(brand, text=f"BusSign Maker · v{APP_VERSION.split()[0]}", style="BrandSub.TLabel").pack(anchor="w")
     bar = ttk.Frame(header, style="Header.TFrame")
-    bar.pack(side="left", fill="x", expand=True)
+    bar.pack(side="left", fill="both", expand=True)
     ttk.Separator(root, orient="horizontal").pack(fill="x")
     sbar = ttk.Frame(root, style="Status.TFrame")
     sbar.pack(fill="x", side="bottom")
@@ -2868,7 +2907,7 @@ def run_gui():
     lcount.pack(side="left", padx=6)
     lbf = ttk.Frame(lf)
     lbf.pack(fill="both", expand=True)
-    lb = tk.Listbox(lbf, width=18, exportselection=False)
+    lb = tk.Listbox(lbf, width=14, exportselection=False)
     lb.pack(side="left", fill="both", expand=True)
     sb = ttk.Scrollbar(lbf, command=lb.yview)
     sb.pack(side="left", fill="y")
@@ -2883,7 +2922,7 @@ def run_gui():
     # 오른쪽 = 편집 패널 (탭마다 세로 스크롤)
     side = ttk.Frame(body, style="Card.TFrame", padding=(10, 10, 4, 10))
     body.add(side, weight=0)
-    mid = ttk.Notebook(side, width=430)
+    mid = ttk.Notebook(side, width=400)
     mid.pack(fill="both", expand=True)
     scrollers = []
 
@@ -2972,7 +3011,7 @@ def run_gui():
     ttk.Label(xf, text="로고는 판 크기에 맞춰 줄여 한 장면으로 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈). "
                        "잔여좌석에 숫자를 넣으면 '잔여좌석 24' 화면이 추가됩니다. "
                        "기점·종점에 '김해|구산동'처럼 | 를 넣으면 두 줄 화면에서 그 자리에서 줄을 바꿉니다.",
-              style="Muted.TLabel", wraplength=360, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
+              style="Muted.TLabel", wraplength=310, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
     rom_frame = ttk.LabelFrame(tab_edit, text="영문 자동 변환 (국어의 로마자 표기법 + 사전)", padding=6)
     rom_frame.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8, 0))
     rom_over = tk.BooleanVar(value=False)
@@ -3105,7 +3144,7 @@ def run_gui():
     led_var = tk.BooleanVar(value=bool(settings.get("led_look", True)))
     ttk.Checkbutton(pctl, text="LED 모양", variable=led_var).pack(side="left", padx=(2, 0))
     play_btn = ttk.Button(pctl, text="▶ 재생", width=7, style="Accent.TButton")
-    play_btn.pack(side="right")
+    play_btn.pack(side="left", padx=(10, 0))
     pctl2 = ttk.Frame(pv)                      # 둘째 줄: 점 편집 · 원본 비교
     pctl2.pack(fill="x", pady=(6, 0))
     mode_var = tk.StringVar(value="보기")
@@ -3117,6 +3156,8 @@ def run_gui():
     ttk.Separator(pctl2, orient="vertical").pack(side="left", fill="y", padx=10)
     cmp_var = tk.BooleanVar(value=False)
     ttk.Checkbutton(pctl2, text="원본 겹쳐보기", variable=cmp_var).pack(side="left")
+    flow_layout(pctl)
+    flow_layout(pctl2)
     cwrap = ttk.Frame(pv)
     cwrap.pack(fill="both", expand=True, pady=(10, 0))
     canvas = tk.Canvas(cwrap, background=PAL["canvas"], highlightthickness=0)
@@ -3130,7 +3171,9 @@ def run_gui():
     info = tk.StringVar()
     warn_var = tk.StringVar()
     ttk.Label(pv, textvariable=info, style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
-    ttk.Label(pv, textvariable=warn_var, style="Warn.TLabel", wraplength=760, justify="left").pack(anchor="w")
+    warn_lbl = ttk.Label(pv, textvariable=warn_var, style="Warn.TLabel", wraplength=760, justify="left")
+    warn_lbl.pack(anchor="w")
+    pv.bind("<Configure>", lambda e: warn_lbl.configure(wraplength=max(200, e.width - 30)), add="+")
     legend = ttk.Label(pv, text="", style="Muted.TLabel")
     legend.pack(anchor="w")
 
@@ -4037,9 +4080,11 @@ def run_gui():
         except Exception:
             pass
 
-    theme_btn = ttk.Button(header, text="", style="Tool.TButton",
+    ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=4)
+    theme_btn = ttk.Button(bar, text="☀ 라이트", style="Tool.TButton", width=8,
                            command=lambda: theme_var.set("라이트" if theme_var.get() == "다크" else "다크"))
-    theme_btn.pack(side="right")
+    theme_btn.pack(side="left")
+    flow_layout(bar)
     theme_var.trace_add("write", apply_theme)
     m_view = tk.Menu(menubar, tearoff=0)
     for t_ in THEMES:
