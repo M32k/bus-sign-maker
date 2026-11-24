@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.2 (2026-11-22)"
+APP_VERSION = "2.3 (2026-11-24)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -2653,6 +2653,156 @@ IS_MAC = sys.platform == "darwin"
 MOD = "Command" if IS_MAC else "Control"
 
 
+# ───────────────────────── 화면 테마 (다크 / 라이트) ─────────────────────────
+THEMES = {
+    "다크": {"bg": "#0f1115", "surface": "#171a21", "surface2": "#20242d", "border": "#2b303b",
+             "text": "#e7e9ee", "muted": "#8a92a6", "accent": "#4f8cff", "accent_hi": "#6aa0ff",
+             "on_accent": "#ffffff", "warn": "#ff6b6b", "select": "#2b4a85", "header": "#12151b",
+             "canvas": "#08090b", "input": "#11141a"},
+    "라이트": {"bg": "#f3f4f7", "surface": "#ffffff", "surface2": "#eef0f4", "border": "#dde1e8",
+              "text": "#1c2230", "muted": "#687186", "accent": "#2563eb", "accent_hi": "#3b76f0",
+              "on_accent": "#ffffff", "warn": "#d93636", "select": "#d6e4ff", "header": "#ffffff",
+              "canvas": "#14161a", "input": "#ffffff"},
+}
+
+
+def setup_theme(root, name, ttk):
+    """ttk 'clam'을 바탕으로 색·여백·글꼴을 요즘 앱처럼 맞춤. 몇 번이든 다시 불러도 됨(테마 전환)"""
+    import tkinter.font as tkfont
+    P = THEMES.get(name) or THEMES["다크"]
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    base = tkfont.nametofont("TkDefaultFont")
+    fam = base.actual("family")
+    size = 13 if IS_MAC else 10
+    for fn in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+        try:
+            tkfont.nametofont(fn).configure(size=size)
+        except Exception:
+            pass
+    F = {"base": (fam, size), "bold": (fam, size, "bold"), "title": (fam, size + 3, "bold"),
+         "section": (fam, size, "bold"), "small": (fam, size - 1), "list": (fam, size + 1)}
+    st.configure(".", background=P["bg"], foreground=P["text"], bordercolor=P["border"],
+                 lightcolor=P["surface"], darkcolor=P["surface"], troughcolor=P["surface2"],
+                 fieldbackground=P["input"], selectbackground=P["select"],
+                 selectforeground=P["text"], insertcolor=P["text"], arrowcolor=P["muted"],
+                 focuscolor=P["accent"], font=F["base"])
+    for sty, bg in (("TFrame", P["surface"]), ("Card.TFrame", P["surface"]), ("Header.TFrame", P["header"]),
+                    ("Status.TFrame", P["header"])):
+        st.configure(sty, background=bg)
+    st.configure("Card.TFrame", bordercolor=P["border"], relief="solid", borderwidth=1)
+    st.configure("TLabel", background=P["surface"], foreground=P["text"])
+    st.configure("Bg.TLabel", background=P["bg"])
+    st.configure("Header.TLabel", background=P["header"], foreground=P["text"])
+    st.configure("Brand.TLabel", background=P["header"], foreground=P["text"], font=F["title"])
+    st.configure("BrandSub.TLabel", background=P["header"], foreground=P["muted"], font=F["small"])
+    st.configure("Status.TLabel", background=P["header"], foreground=P["muted"], font=F["small"], padding=(12, 5))
+    st.configure("Muted.TLabel", background=P["surface"], foreground=P["muted"], font=F["small"])
+    st.configure("Warn.TLabel", background=P["surface"], foreground=P["warn"], font=F["small"])
+    st.configure("Section.TLabel", background=P["surface"], foreground=P["text"], font=F["section"])
+    st.configure("Badge.TLabel", background=P["surface2"], foreground=P["muted"], font=F["small"], padding=(8, 1))
+    # 카드 안 묶음 상자
+    st.configure("TLabelframe", background=P["surface"], bordercolor=P["border"], relief="solid",
+                 borderwidth=1, lightcolor=P["border"], darkcolor=P["border"])
+    st.configure("TLabelframe.Label", background=P["surface"], foreground=P["accent"], font=F["bold"])
+    # 버튼
+    st.configure("TButton", background=P["surface2"], foreground=P["text"], bordercolor=P["border"],
+                 lightcolor=P["surface2"], darkcolor=P["surface2"], padding=(10, 5), relief="flat",
+                 focusthickness=0, focuscolor=P["surface2"], width=-4)
+    st.map("TButton", background=[("pressed", P["border"]), ("active", P["border"])],
+           bordercolor=[("active", P["accent"])])
+    st.configure("Accent.TButton", background=P["accent"], foreground=P["on_accent"], bordercolor=P["accent"],
+                 lightcolor=P["accent"], darkcolor=P["accent"], font=F["bold"], focuscolor=P["accent"])
+    st.map("Accent.TButton", background=[("pressed", P["accent"]), ("active", P["accent_hi"])],
+           bordercolor=[("active", P["accent_hi"])], foreground=[("active", P["on_accent"])])
+    st.configure("Tool.TButton", background=P["header"], foreground=P["text"], bordercolor=P["header"],
+                 lightcolor=P["header"], darkcolor=P["header"], padding=(9, 5), focuscolor=P["header"], width=0)
+    st.map("Tool.TButton", background=[("pressed", P["border"]), ("active", P["surface2"])],
+           bordercolor=[("active", P["border"])])
+    st.configure("ToolAccent.TButton", background=P["accent"], foreground=P["on_accent"], bordercolor=P["accent"],
+                 lightcolor=P["accent"], darkcolor=P["accent"], padding=(12, 5), font=F["bold"], focuscolor=P["accent"], width=0)
+    st.map("ToolAccent.TButton", background=[("active", P["accent_hi"])], foreground=[("active", P["on_accent"])])
+    st.configure("Small.TButton", padding=(7, 3), font=F["small"], width=0)
+    # 입력 칸
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, fieldbackground=P["input"], foreground=P["text"], bordercolor=P["border"],
+                     lightcolor=P["input"], darkcolor=P["input"], padding=(6, 4), insertcolor=P["text"],
+                     arrowcolor=P["muted"], background=P["surface2"])
+        st.map(w, bordercolor=[("focus", P["accent"])], lightcolor=[("focus", P["accent"])],
+               fieldbackground=[("readonly", P["input"]), ("disabled", P["surface2"])],
+               foreground=[("readonly", P["text"]), ("disabled", P["muted"])],
+               selectbackground=[("readonly", P["input"])], selectforeground=[("readonly", P["text"])])
+    for w in ("TCheckbutton", "TRadiobutton"):
+        st.configure(w, background=P["surface"], foreground=P["text"], indicatorbackground=P["input"],
+                     indicatorforeground=P["accent"], bordercolor=P["border"], padding=(2, 2), focuscolor=P["surface"])
+        st.map(w, background=[("active", P["surface"])], indicatorbackground=[("selected", P["accent"])],
+               indicatorforeground=[("selected", P["on_accent"])])
+    # 탭
+    st.configure("TNotebook", background=P["surface"], bordercolor=P["border"], tabmargins=(0, 0, 0, 0),
+                 lightcolor=P["surface"], darkcolor=P["surface"])
+    st.configure("TNotebook.Tab", background=P["surface"], foreground=P["muted"], padding=(16, 7),
+                 bordercolor=P["surface"], lightcolor=P["surface"], darkcolor=P["surface"], font=F["bold"])
+    st.map("TNotebook.Tab", background=[("selected", P["surface2"]), ("active", P["surface2"])],
+           foreground=[("selected", P["accent"]), ("active", P["text"])],
+           lightcolor=[("selected", P["accent"])], bordercolor=[("selected", P["surface2"])])
+    # 표·스크롤바·구분선
+    st.configure("Treeview", background=P["surface"], fieldbackground=P["surface"], foreground=P["text"],
+                 bordercolor=P["border"], rowheight=26)
+    st.map("Treeview", background=[("selected", P["select"])], foreground=[("selected", P["text"])])
+    st.configure("Treeview.Heading", background=P["surface2"], foreground=P["muted"], bordercolor=P["border"],
+                 relief="flat", font=F["bold"])
+    st.configure("TScrollbar", background=P["surface2"], troughcolor=P["surface"], bordercolor=P["surface"],
+                 lightcolor=P["surface2"], darkcolor=P["surface2"], arrowcolor=P["muted"], gripcount=0)
+    st.map("TScrollbar", background=[("active", P["border"])])
+    st.configure("TSeparator", background=P["border"])
+    st.configure("TPanedwindow", background=P["bg"])
+    st.configure("Sash", sashthickness=10, gripcount=0, background=P["bg"], lightcolor=P["bg"], bordercolor=P["bg"])
+    root.configure(background=P["bg"])
+    root.option_add("*TCombobox*Listbox.background", P["surface"])
+    root.option_add("*TCombobox*Listbox.foreground", P["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", P["accent"])
+    root.option_add("*TCombobox*Listbox.selectForeground", P["on_accent"])
+    root.option_add("*TCombobox*Listbox.font", F["base"])
+    return P, F
+
+
+def recolor_tk(widget, P, F, keep=()):
+    """ttk가 아닌 tk 위젯(목록·글상자·메뉴·창)을 테마 색으로. keep = 그대로 둘 위젯(미리보기 캔버스 등)"""
+    import tkinter as tk
+    stack = [widget]
+    while stack:
+        w = stack.pop()
+        stack.extend(w.winfo_children())
+        if w in keep:
+            continue
+        try:
+            if isinstance(w, (tk.Tk, tk.Toplevel)):
+                w.configure(background=P["bg"])
+            elif isinstance(w, tk.Listbox):
+                w.configure(background=P["surface"], foreground=P["text"], selectbackground=P["select"],
+                            selectforeground=P["text"], highlightthickness=0, borderwidth=0,
+                            activestyle="none", font=F["list"])
+            elif isinstance(w, tk.Text):
+                w.configure(background=P["input"], foreground=P["text"], insertbackground=P["text"], font=F["base"],
+                            selectbackground=P["select"], highlightthickness=1, highlightbackground=P["border"],
+                            highlightcolor=P["accent"], borderwidth=0, relief="flat", padx=6, pady=4)
+            elif isinstance(w, tk.Canvas):
+                w.configure(background=P["surface"], highlightthickness=0)
+            elif isinstance(w, tk.Menu):
+                if not IS_MAC:
+                    w.configure(background=P["surface"], foreground=P["text"], activebackground=P["accent"],
+                                activeforeground=P["on_accent"], borderwidth=0)
+        except Exception:
+            pass
+        if w.winfo_class() == "TCombobox":          # 이미 만들어진 펼침 목록도 색 바꿈
+            try:
+                pd = w.tk.call("ttk::combobox::PopdownWindow", w)
+                w.tk.call(f"{pd}.f.l", "configure", "-background", P["surface"], "-foreground", P["text"],
+                          "-selectbackground", P["accent"], "-selectforeground", P["on_accent"])
+            except Exception:
+                pass
+
+
 def run_gui():
     import copy
     import shutil
@@ -2675,8 +2825,8 @@ def run_gui():
 
     root = tk.Tk()
     root.title(f"노선이미지 생성기 - EBASE BUS_Controller  ·  v{APP_VERSION}")
-    root.geometry("1380x860")
-    root.minsize(1000, 640)
+    root.geometry("1440x880")
+    root.minsize(1100, 680)
 
     S = {  # 화면 상태
         "routes": [], "sel": None, "photo": None, "loading": False, "project": None, "dirty": False,
@@ -2685,16 +2835,37 @@ def run_gui():
     }
     status = tk.StringVar(value="준비")
 
-    # ── 레이아웃 ──
-    bar = ttk.Frame(root, padding=(4, 4))
-    bar.pack(fill="x")
-    ttk.Label(root, textvariable=status, anchor="w", relief="sunken").pack(fill="x", side="bottom")
-    body = ttk.Frame(root)
-    body.pack(fill="both", expand=True)
+    # ── 테마 ──
+    theme_var = tk.StringVar(value=settings.get("theme") if settings.get("theme") in THEMES else "다크")
+    PAL, FON = setup_theme(root, theme_var.get(), ttk)
 
-    # 노선 목록
-    lf = ttk.LabelFrame(body, text="노선 목록", padding=4)
-    lf.pack(side="left", fill="y", padx=4, pady=4)
+    # ── 레이아웃: 위 = 도구 막대, 왼쪽 = 노선 목록, 가운데 = 미리보기, 오른쪽 = 편집 패널 ──
+    header = ttk.Frame(root, style="Header.TFrame", padding=(14, 8))
+    header.pack(fill="x")
+    brand = ttk.Frame(header, style="Header.TFrame")
+    brand.pack(side="left", padx=(0, 18))
+    ttk.Label(brand, text="노선이미지 생성기", style="Brand.TLabel").pack(anchor="w")
+    ttk.Label(brand, text=f"BusSign Maker · v{APP_VERSION.split()[0]}", style="BrandSub.TLabel").pack(anchor="w")
+    bar = ttk.Frame(header, style="Header.TFrame")
+    bar.pack(side="left", fill="x", expand=True)
+    ttk.Separator(root, orient="horizontal").pack(fill="x")
+    sbar = ttk.Frame(root, style="Status.TFrame")
+    sbar.pack(fill="x", side="bottom")
+    ttk.Label(sbar, textvariable=status, anchor="w", style="Status.TLabel").pack(side="left", fill="x", expand=True)
+    count_var = tk.StringVar(value="")
+    ttk.Label(sbar, textvariable=count_var, style="Status.TLabel").pack(side="right")
+    ttk.Separator(root, orient="horizontal").pack(fill="x", side="bottom")
+    body = ttk.Panedwindow(root, orient="horizontal")
+    body.pack(fill="both", expand=True, padx=12, pady=12)
+
+    # 노선 목록 (카드)
+    lf = ttk.Frame(body, style="Card.TFrame", padding=12)
+    body.add(lf, weight=0)
+    lhead = ttk.Frame(lf)
+    lhead.pack(fill="x", pady=(0, 8))
+    ttk.Label(lhead, text="노선", style="Section.TLabel").pack(side="left")
+    lcount = ttk.Label(lhead, text="0", style="Badge.TLabel")
+    lcount.pack(side="left", padx=6)
     lbf = ttk.Frame(lf)
     lbf.pack(fill="both", expand=True)
     lb = tk.Listbox(lbf, width=18, exportselection=False)
@@ -2703,16 +2874,52 @@ def run_gui():
     sb.pack(side="left", fill="y")
     lb.config(yscrollcommand=sb.set)
     lbtn = ttk.Frame(lf)
-    lbtn.pack(fill="x", pady=(4, 0))
+    lbtn.pack(fill="x", pady=(8, 0))
 
-    # 가운데 탭
-    mid = ttk.Notebook(body, width=400)
-    mid.pack(side="left", fill="y", padx=4, pady=4)
-    tab_edit, tab_style, tab_font, tab_out = (ttk.Frame(mid, padding=8) for _ in range(4))
-    mid.add(tab_edit, text="편집")
-    mid.add(tab_style, text="스타일")
-    mid.add(tab_font, text="폰트")
-    mid.add(tab_out, text="출력")
+    # 가운데 = 미리보기 카드 (아래 '미리보기'에서 채움)
+    pv = ttk.Frame(body, style="Card.TFrame", padding=12)
+    body.add(pv, weight=1)
+
+    # 오른쪽 = 편집 패널 (탭마다 세로 스크롤)
+    side = ttk.Frame(body, style="Card.TFrame", padding=(10, 10, 4, 10))
+    body.add(side, weight=0)
+    mid = ttk.Notebook(side, width=430)
+    mid.pack(fill="both", expand=True)
+    scrollers = []
+
+    def make_tab(title):
+        outer = ttk.Frame(mid)
+        cv = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
+        vs = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+        inner = ttk.Frame(cv, padding=(12, 12, 14, 12))
+        win = cv.create_window(0, 0, anchor="nw", window=inner)
+        cv.configure(yscrollcommand=vs.set)
+        vs.pack(side="right", fill="y")
+        cv.pack(side="left", fill="both", expand=True)
+
+        def sync(_=None):
+            cv.configure(scrollregion=(0, 0, inner.winfo_reqwidth(), inner.winfo_reqheight()))
+            cv.itemconfigure(win, width=cv.winfo_width())
+        inner.bind("<Configure>", sync)
+        cv.bind("<Configure>", sync)
+
+        def wheel(ev):
+            if inner.winfo_reqheight() <= cv.winfo_height():
+                return
+            d = ev.delta if IS_MAC else ev.delta // 120
+            cv.yview_scroll(-d if d else (-1 if getattr(ev, "num", 0) == 4 else 1), "units")
+        for w_ in (cv, inner):
+            w_.bind("<Enter>", lambda e: (root.bind_all("<MouseWheel>", wheel), root.bind_all("<Button-4>", wheel),
+                                          root.bind_all("<Button-5>", wheel)))
+            w_.bind("<Leave>", lambda e: (root.unbind_all("<MouseWheel>"), root.unbind_all("<Button-4>"),
+                                          root.unbind_all("<Button-5>")))
+        mid.add(outer, text=title)
+        scrollers.append(cv)
+        return inner
+
+    tab_edit, tab_style, tab_font, tab_out = (make_tab(t) for t in ("편집", "스타일", "폰트", "출력"))
+    for t_ in (tab_edit, tab_style, tab_font, tab_out):
+        t_.columnconfigure(1, weight=1)
 
     # ── 편집 탭 ──
     vars_ = {}
@@ -2730,7 +2937,7 @@ def run_gui():
     ttk.Label(tab_edit, text="경유지").grid(row=6, column=0, sticky="ne", padx=3)
     via_txt = tk.Text(tab_edit, width=30, height=6, wrap="word", undo=False)
     via_txt.grid(row=6, column=1, sticky="we", pady=2)
-    ttk.Label(tab_edit, text="쉼표 = 정류장, 줄바꿈 = 줄 (한글 줄 → 영문 줄)", foreground="gray").grid(
+    ttk.Label(tab_edit, text="쉼표 = 정류장, 줄바꿈 = 줄 (한글 줄 → 영문 줄)", style="Muted.TLabel").grid(
         row=7, column=1, sticky="w")
     ttk.Label(tab_edit, text="템플릿").grid(row=8, column=0, sticky="e", padx=3)
     tpl_var = tk.StringVar(value="jinmyeong_front_192x160")
@@ -2738,6 +2945,8 @@ def run_gui():
     tpl_cb.grid(row=8, column=1, sticky="we", pady=2)
     xf = ttk.LabelFrame(tab_edit, text="추가 칸 — 부산 구형 3색 / 신형 풀컬러 템플릿", padding=6)
     xf.grid(row=9, column=0, columnspan=2, sticky="we", pady=(8, 0))
+    xf.columnconfigure(1, weight=1)
+    xf.columnconfigure(3, weight=1)
     for i, (k, label) in enumerate(EXTRA_FIELDS):
         ttk.Label(xf, text=label).grid(row=i // 2, column=(i % 2) * 2, sticky="e", padx=2, pady=1)
         v = tk.StringVar()
@@ -2763,7 +2972,7 @@ def run_gui():
     ttk.Label(xf, text="로고는 판 크기에 맞춰 줄여 한 장면으로 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈). "
                        "잔여좌석에 숫자를 넣으면 '잔여좌석 24' 화면이 추가됩니다. "
                        "기점·종점에 '김해|구산동'처럼 | 를 넣으면 두 줄 화면에서 그 자리에서 줄을 바꿉니다.",
-              foreground="gray", wraplength=360, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
+              style="Muted.TLabel", wraplength=360, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
     rom_frame = ttk.LabelFrame(tab_edit, text="영문 자동 변환 (국어의 로마자 표기법 + 사전)", padding=6)
     rom_frame.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8, 0))
     rom_over = tk.BooleanVar(value=False)
@@ -2843,7 +3052,7 @@ def run_gui():
         row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
     ttk.Label(tab_font, text="(자동) = 앱에 들어 있는 나눔고딕 / 원본형 번호 글꼴\n"
                              "~/BusSignMaker/fonts 에 넣은 폰트는 목록에 자동으로 나옵니다.",
-              foreground="gray", justify="left").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+              style="Muted.TLabel", justify="left").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     # ── 출력 탭 ──
     out_vars = {"bmp_depth": tk.StringVar(value=settings["bmp_depth"]),
@@ -2857,7 +3066,7 @@ def run_gui():
     ttk.Entry(tab_out, textvariable=out_vars["name_pattern"], width=26).grid(row=1, column=1, sticky="we", pady=3)
     ttk.Label(tab_out, text="쓸 수 있는 값: {no} {kind} {start_ko} {end_ko} {page}\n"
                             "예) {no}_{no} → 360_360.bmp, 여러 장이면 _1, _2가 붙음",
-              foreground="gray", justify="left").grid(row=2, column=1, sticky="w")
+              style="Muted.TLabel", justify="left", wraplength=300).grid(row=2, column=1, columnspan=2, sticky="w")
     for i, (k, label) in enumerate([("out_dir", "출력 폴더"), ("usb_dir", "USB·복사 폴더")]):
         ttk.Label(tab_out, text=label).grid(row=3 + i, column=0, sticky="e", padx=3, pady=3)
         ttk.Entry(tab_out, textvariable=out_vars[k], width=26).grid(row=3 + i, column=1, sticky="we", pady=3)
@@ -2878,8 +3087,11 @@ def run_gui():
         v.trace_add("write", save_out_settings)
 
     # ── 미리보기 ──
-    pv = ttk.LabelFrame(body, text="미리보기", padding=4)
-    pv.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+    phead = ttk.Frame(pv)
+    phead.pack(fill="x", pady=(0, 8))
+    ttk.Label(phead, text="미리보기", style="Section.TLabel").pack(side="left")
+    tpl_badge = ttk.Label(phead, text="", style="Badge.TLabel")
+    tpl_badge.pack(side="left", padx=8)
     pctl = ttk.Frame(pv)
     pctl.pack(fill="x")
     zoom_var = tk.StringVar(value=str(settings.get("zoom", "맞춤")))
@@ -2889,20 +3101,25 @@ def run_gui():
     ttk.Label(pctl, text="페이지").pack(side="left")
     page_cb = ttk.Combobox(pctl, textvariable=page_var, values=["1"], width=3, state="readonly")
     page_cb.pack(side="left", padx=(2, 8))
-    mode_var = tk.StringVar(value="보기")
-    ttk.Radiobutton(pctl, text="보기", variable=mode_var, value="보기").pack(side="left")
-    ttk.Radiobutton(pctl, text="점 편집", variable=mode_var, value="편집").pack(side="left")
-    pen_var = tk.StringVar(value="흰색")
-    ttk.Combobox(pctl, textvariable=pen_var, values=PEN_COLORS, width=9, state="readonly").pack(side="left", padx=(4, 4))
+    ttk.Separator(pctl, orient="vertical").pack(side="left", fill="y", padx=6)
     led_var = tk.BooleanVar(value=bool(settings.get("led_look", True)))
-    ttk.Checkbutton(pctl, text="LED 모양", variable=led_var).pack(side="left", padx=(8, 0))
-    play_btn = ttk.Button(pctl, text="▶ 재생", width=7)
-    play_btn.pack(side="left", padx=(6, 0))
+    ttk.Checkbutton(pctl, text="LED 모양", variable=led_var).pack(side="left", padx=(2, 0))
+    play_btn = ttk.Button(pctl, text="▶ 재생", width=7, style="Accent.TButton")
+    play_btn.pack(side="right")
+    pctl2 = ttk.Frame(pv)                      # 둘째 줄: 점 편집 · 원본 비교
+    pctl2.pack(fill="x", pady=(6, 0))
+    mode_var = tk.StringVar(value="보기")
+    ttk.Radiobutton(pctl2, text="보기", variable=mode_var, value="보기").pack(side="left")
+    ttk.Radiobutton(pctl2, text="점 편집", variable=mode_var, value="편집").pack(side="left", padx=(6, 0))
+    ttk.Label(pctl2, text="펜", style="Muted.TLabel").pack(side="left", padx=(10, 2))
+    pen_var = tk.StringVar(value="흰색")
+    ttk.Combobox(pctl2, textvariable=pen_var, values=PEN_COLORS, width=9, state="readonly").pack(side="left")
+    ttk.Separator(pctl2, orient="vertical").pack(side="left", fill="y", padx=10)
     cmp_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(pctl, text="원본 겹쳐보기", variable=cmp_var).pack(side="left", padx=(8, 0))
+    ttk.Checkbutton(pctl2, text="원본 겹쳐보기", variable=cmp_var).pack(side="left")
     cwrap = ttk.Frame(pv)
-    cwrap.pack(fill="both", expand=True, pady=(4, 0))
-    canvas = tk.Canvas(cwrap, background="#2b2b2b", highlightthickness=0)
+    cwrap.pack(fill="both", expand=True, pady=(10, 0))
+    canvas = tk.Canvas(cwrap, background=PAL["canvas"], highlightthickness=0)
     hsb = ttk.Scrollbar(cwrap, orient="horizontal", command=canvas.xview)
     vsb = ttk.Scrollbar(cwrap, orient="vertical", command=canvas.yview)
     canvas.configure(xscrollcommand=hsb.set, yscrollcommand=vsb.set)
@@ -2912,9 +3129,9 @@ def run_gui():
     img_item = canvas.create_image(0, 0, anchor="nw")
     info = tk.StringVar()
     warn_var = tk.StringVar()
-    ttk.Label(pv, textvariable=info, foreground="gray").pack(anchor="w", pady=(4, 0))
-    ttk.Label(pv, textvariable=warn_var, foreground="#c0392b", wraplength=760, justify="left").pack(anchor="w")
-    legend = ttk.Label(pv, text="", foreground="gray")
+    ttk.Label(pv, textvariable=info, style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
+    ttk.Label(pv, textvariable=warn_var, style="Warn.TLabel", wraplength=760, justify="left").pack(anchor="w")
+    legend = ttk.Label(pv, text="", style="Muted.TLabel")
     legend.pack(anchor="w")
 
     def zoom_now(img_w=192, img_h=160):
@@ -2964,6 +3181,8 @@ def run_gui():
         return (r.get("no") or "(새 노선)") + (f"  [{k}]" if k and k != "일반" else "")
 
     def refill_list(keep=None):
+        lcount.config(text=str(len(S["routes"])))
+        count_var.set(f"노선 {len(S['routes'])}개")
         lb.delete(0, "end")
         for r in S["routes"]:
             lb.insert("end", label_of(r))
@@ -3100,7 +3319,12 @@ def run_gui():
                 d.line([(0, y), (big.width, y)], fill=(40, 40, 40))
         S["photo"] = ImageTk.PhotoImage(big)
         canvas.itemconfig(img_item, image=S["photo"])
-        canvas.configure(scrollregion=(0, 0, big.width, big.height))
+        ox = max(0, (canvas.winfo_width() - big.width) // 2)          # 가운데에 놓기
+        oy = max(0, (canvas.winfo_height() - big.height) // 2)
+        S["off"] = (ox, oy)
+        canvas.coords(img_item, ox, oy)
+        canvas.configure(scrollregion=(0, 0, max(canvas.winfo_width(), big.width + ox), max(canvas.winfo_height(), big.height + oy)))
+        tpl_badge.config(text=f"{r.get('template') or ''}  ·  {S['page'] + 1}/{n}쪽")
         names = file_names(r, n, settings.get("name_pattern"))
         info.set(f"{img.width}x{img.height} px  |  {r.get('template')}  |  {names[S['page']]}"
                  f"{'  |  편집한 점 ' + str(len((r.get('edits') or {}).get(str(S['page']), {}))) + '개' if (r.get('edits') or {}).get(str(S['page'])) else ''}{extra}")
@@ -3182,8 +3406,9 @@ def run_gui():
     # ── 점 편집 ──
     def canvas_xy(ev):
         z = S.get("z", 4)
-        x = int(canvas.canvasx(ev.x) // z)
-        y = int(canvas.canvasy(ev.y) // z)
+        ox, oy = S.get("off", (0, 0))
+        x = int((canvas.canvasx(ev.x) - ox) // z)
+        y = int((canvas.canvasy(ev.y) - oy) // z)
         return x, y
 
     def paint(ev, value):
@@ -3286,9 +3511,12 @@ def run_gui():
         refill_list(i + d)
         commit()
 
-    for t, c in [("새 노선", new_route), ("복제", dup_route), ("삭제", del_route),
-                 ("▲", lambda: move_route(-1)), ("▼", lambda: move_route(1))]:
-        ttk.Button(lbtn, text=t, width=5 if len(t) > 1 else 2, command=c).pack(side="left", padx=1)
+    ttk.Button(lbtn, text="＋ 새 노선", style="Accent.TButton", command=new_route).pack(fill="x", pady=(0, 6))
+    lrow = ttk.Frame(lbtn)
+    lrow.pack(fill="x")
+    for t, c in [("복제", dup_route), ("삭제", del_route), ("▲", lambda: move_route(-1)), ("▼", lambda: move_route(1))]:
+        ttk.Button(lrow, text=t, style="Small.TButton", width=4 if len(t) > 1 else 2,
+                   command=c).pack(side="left", padx=(0, 4), expand=len(t) > 1, fill="x")
 
     # ── 영문 자동 변환 ──
     def fill_english(r, overwrite):
@@ -3325,7 +3553,7 @@ def run_gui():
         open_folder(ROMAN_FILE)
         status.set(f"사전 파일: {ROMAN_FILE} (고친 뒤 저장하면 바로 적용)")
 
-    ttk.Button(rf2, text="이 노선 채우기", command=romanize_current).pack(side="left")
+    ttk.Button(rf2, text="이 노선 채우기", style="Accent.TButton", command=romanize_current).pack(side="left")
     ttk.Button(rf2, text="모든 노선 채우기", command=romanize_all).pack(side="left", padx=4)
     ttk.Button(rf2, text="사전 편집…", command=open_roman_dict).pack(side="left")
 
@@ -3348,7 +3576,7 @@ def run_gui():
         status.set(f"프리셋 저장: {name}")
 
     preset_cb.bind("<<ComboboxSelected>>", apply_preset)
-    ttk.Button(pf_, text="프리셋 저장", command=save_preset).pack(side="left", padx=4)
+    ttk.Button(pf_, text="프리셋 저장", style="Accent.TButton", command=save_preset).pack(side="left", padx=6)
 
     # ── 파일: 프로젝트·엑셀 ──
     def ask_discard():
@@ -3483,7 +3711,8 @@ def run_gui():
     def show_warnings(warns, nfiles):
         w = tk.Toplevel(root)
         w.title("압축 경고")
-        w.geometry("640x380")
+        w.geometry("680x420")
+        w.configure(background=PAL["surface"])
         ttk.Label(w, text=f"{nfiles}개 파일을 만들었습니다. 아래 {len(warns)}건은 글자가 칸보다 길어 좁게 눌렸습니다.\n"
                           "숫자가 작을수록 많이 눌린 것입니다. 노선을 더블클릭하면 그 노선으로 이동합니다.",
                   padding=8).pack(anchor="w")
@@ -3514,7 +3743,7 @@ def run_gui():
         bf = ttk.Frame(w, padding=8)
         bf.pack(fill="x")
         ttk.Button(bf, text="목록 저장…", command=save_txt).pack(side="left")
-        ttk.Button(bf, text="닫기", command=w.destroy).pack(side="right")
+        ttk.Button(bf, text="닫기", style="Accent.TButton", command=w.destroy).pack(side="right")
 
     def copy_usb():
         dest = out_vars["usb_dir"].get().strip()
@@ -3553,7 +3782,8 @@ def run_gui():
     def glyph_editor():
         w = tk.Toplevel(root)
         w.title("글자 보정 — 한 번 고치면 그 글자가 나오는 모든 노선에 적용")
-        w.geometry("900x620")
+        w.geometry("940x660")
+        w.configure(background=PAL["surface"])
         left = ttk.Frame(w, padding=6)
         left.pack(side="left", fill="y")
         ttk.Label(left, text="저장된 보정").pack(anchor="w")
@@ -3579,7 +3809,7 @@ def run_gui():
         gc = tk.Canvas(right, background="#111", highlightthickness=0)
         gc.pack(fill="both", expand=True, pady=6)
         msg = tk.StringVar(value="칸을 클릭·드래그해서 점을 켜고 끄세요. 저장하면 미리보기에 바로 반영됩니다.")
-        ttk.Label(right, textvariable=msg, foreground="gray").pack(anchor="w")
+        ttk.Label(right, textvariable=msg, style="Muted.TLabel").pack(anchor="w")
         bot = ttk.Frame(right)
         bot.pack(fill="x", pady=(6, 0))
         G = {"m": None, "h": 14, "paint": None, "cell": 20}
@@ -3721,12 +3951,13 @@ def run_gui():
             load_glyph()
             msg.set("보정을 지우고 기본 모양으로 되돌렸습니다.")
 
-        ttk.Button(bot, text="저장", command=save_glyph).pack(side="left")
+        ttk.Button(bot, text="저장", style="Accent.TButton", command=save_glyph).pack(side="left")
         ttk.Button(bot, text="기본값으로 되돌리기", command=reset_glyph).pack(side="left", padx=6)
         ttk.Button(bot, text="모두 지우기", command=lambda: (G["m"].fill(False), draw()) if G["m"] is not None else None).pack(side="left")
         ttk.Button(bot, text="닫기", command=w.destroy).pack(side="right")
         refresh_list()
         load_glyph()
+        recolor_tk(w, PAL, FON, keep=(gc,))
 
     def reload_templates():
         tpl_cb["values"] = all_template_names()
@@ -3777,12 +4008,46 @@ def run_gui():
     menubar.add_cascade(label="출력", menu=m_out)
     root.config(menu=menubar)
 
-    for text, cmd in [("열기", open_project), ("저장", save_project_cmd), ("엑셀 불러오기", load_xl),
-                      ("현재 저장(BMP)", save_current), ("전체 생성", save_all),
-                      ("출력폴더 열기", lambda: open_folder(out_dir())), ("USB로 복사", copy_usb),
-                      ("GIF 저장", save_gif_cmd), ("원본 비교", load_compare), ("글자 보정", glyph_editor),
-                      ("↶", undo), ("↷", redo)]:
-        ttk.Button(bar, text=text, command=cmd, width=3 if len(text) == 1 else None).pack(side="left", padx=2)
+    def tool_group(items, last=False):
+        for text, cmd, sty in items:
+            ttk.Button(bar, text=text, command=cmd, style=sty,
+                       width=3 if len(text) == 1 else None).pack(side="left", padx=1)
+        if not last:
+            ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=4)
+
+    T, TA = "Tool.TButton", "ToolAccent.TButton"
+    tool_group([("열기", open_project, T), ("저장", save_project_cmd, T), ("엑셀 불러오기", load_xl, T)])
+    tool_group([("현재 저장(BMP)", save_current, T), ("전체 생성", save_all, TA),
+                ("출력폴더 열기", lambda: open_folder(out_dir()), T), ("USB로 복사", copy_usb, T),
+                ("GIF 저장", save_gif_cmd, T)])
+    tool_group([("원본 비교", load_compare, T), ("글자 보정", glyph_editor, T)])
+    tool_group([("↶", undo, T), ("↷", redo, T)], last=True)
+
+    def apply_theme(*_):
+        nonlocal PAL, FON
+        PAL, FON = setup_theme(root, theme_var.get(), ttk)
+        recolor_tk(root, PAL, FON, keep=(canvas,))
+        for c_ in scrollers:
+            c_.configure(background=PAL["surface"])
+        canvas.configure(background=PAL["canvas"])
+        theme_btn.config(text="☀ 라이트" if theme_var.get() == "다크" else "☾ 다크")
+        settings["theme"] = theme_var.get()
+        try:
+            save_settings(settings)
+        except Exception:
+            pass
+
+    theme_btn = ttk.Button(header, text="", style="Tool.TButton",
+                           command=lambda: theme_var.set("라이트" if theme_var.get() == "다크" else "다크"))
+    theme_btn.pack(side="right")
+    theme_var.trace_add("write", apply_theme)
+    m_view = tk.Menu(menubar, tearoff=0)
+    for t_ in THEMES:
+        m_view.add_radiobutton(label=f"{t_} 테마", variable=theme_var, value=t_)
+    m_view.add_separator()
+    m_view.add_checkbutton(label="LED 모양으로 미리보기", variable=led_var)
+    menubar.insert_cascade(2, label="보기", menu=m_view)
+    apply_theme()
 
     for seq, fn in [("o", open_project), ("s", save_project_cmd), ("z", undo), ("d", dup_route)]:
         root.bind_all(f"<{MOD}-{seq}>", lambda e, f=fn: (f(), "break")[1])
