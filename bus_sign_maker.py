@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.3.1 (2026-11-24)"
+APP_VERSION = "2.4.0 (2026-11-25)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -149,12 +149,18 @@ STYLE_KEYS = [  # (키, 라벨, 기본값)
     ("old_arrow", "구형 화살표", "빨간 삼각형"),
     ("new_via", "신형 경유지 화면", "두 줄 크게"),
     ("new_express", "신형 번호색", "흰색"),
+    ("fc_num", "풀컬러 번호색", "구분별 색"),
+    ("fc_dir", "풀컬러 (방향)색", "초록"),
+    ("fc_sep", "풀컬러 구분자", "초록 –"),
 ]
 OLD_BOX_STYLES = ["(기본)", "검은바탕·빨간숫자", "빨강바탕·검은숫자", "빨강바탕·주황숫자"]
 OLD_GRAD_STYLES = ["(기본)", "주황 한 색", "그라데이션"]
 OLD_ARROW_STYLES = ["(기본)", "빨간 삼각형", "굵은 화살표"]
 NEW_VIA_STYLES = ["(기본)", "두 줄 크게", "끔"]
 NEW_EXPRESS_STYLES = ["(기본)", "흰색", "구분별 색", "빨강→분홍"]
+FC_NUM_STYLES = ["(기본)", "구분별 색", "하늘", "노랑", "자주", "흰색", "초록", "빨강"]
+FC_DIR_STYLES = ["(기본)", "초록", "번호색과 같게", "흰색", "노랑"]
+FC_SEP_STYLES = ["(기본)", "초록 –", "흰색 ▸"]
 # 폰트 설정도 프리셋에 같이 저장됨 (빈 값 = 자동)
 FONT_KEYS = ["text_font", "num_font", "pixel_mode"]
 ARROW_SHAPES = ["(기본)", "◆", "→", "▶", "↔"]
@@ -1782,12 +1788,213 @@ def tpl_busan_new(r, st):
     return pages
 
 
+# ───────────────────────── 풀컬러 방향 표시 (192×32) ─────────────────────────
+# 사용자가 보내 준 풀컬러 LED 행선판 사진들(148-1 부산대학교 방향, 864 인경리–청주의료원, 31 의정부역 방향 등)의 배치.
+#  [번호 + 행선지 + (방 향)]  →  [번호 + 기점 – 종점]  →  [번호 + 영문 기점 – 종점]  →  [번호만 크게]
+#  번호: 굵은 숫자, 구분별 색(일반 하늘·급행 자주·좌석 빨강·마을 노랑…). 행선지는 흰색, '(방 향)'은 초록.
+FC_COLORS = {"하늘": (80, 225, 255), "노랑": (255, 235, 40), "자주": (235, 60, 235), "흰색": (255, 255, 255),
+             "초록": (60, 235, 80), "빨강": (255, 70, 60)}
+FC_KIND = {"일반": "하늘", "급행": "자주", "좌석": "빨강", "마을": "노랑", "심야": "노랑", "순환": "초록"}
+
+
+def _fc_text_fit(text, color, rows, room, strict=False):
+    """여러 크기(rows) 중 칸(room)에 85% 이상 눌리지 않고 들어가는 가장 큰 것으로. 영문은 비례폭 굵은 글씨.
+    strict=True 이면 안 들어갈 때 None (두 줄로 나눌지 정할 때)"""
+    latin = not (has_hangul(text) or any(needs_cjk(ch) for ch in text))
+    for row in rows:
+        if latin:
+            h = OLD_ROWS[row][0]
+            im = render_segments([(text, color)], max(9, h - 3), 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold")
+        else:
+            im = _old_text(text, color, row, 10 ** 4)
+        if im.width * 0.85 <= room:
+            if im.width > room:
+                im = squeeze_w(im, room)
+            return im
+    if strict:
+        return None
+    if latin:
+        return render_segments([(text, color)], 9, room, font_path=str(LATIN_BOLD), stroke="bold")
+    return _old_text(text, color, rows[-1], room)
+
+
+def _fc_block(text, color, x0, x1, img, forced=None):
+    """기점·종점 한 덩어리: 한 줄로 크게, 안 되면 두 줄 (864 '청주 / 의료원', 842-1 영문)"""
+    bw = x1 - x0
+    if not text:
+        return
+    if not forced:
+        one = _fc_text_fit(text, color, ("big", "top"), bw, strict=True)
+        if one is not None:
+            img.alpha_composite(one, (x0 + (bw - one.width) // 2, (OLD_H - one.height) // 2))
+            return
+        latin1 = " " not in text and not has_hangul(text) and not any(needs_cjk(ch) for ch in text)
+        if len(text) <= 4 or latin1:
+            one = _fc_text_fit(text, color, ("two",), bw, strict=True)
+            if one is not None and one.width <= bw:
+                img.alpha_composite(one, (x0 + (bw - one.width) // 2, (OLD_H - one.height) // 2))
+                return
+        if latin1 and len(text) >= 8:                  # 긴 영문 한 단어는 가운데서 끊어 두 줄 (하이픈)
+            cut = text.find("-", len(text) // 3)
+            cut = cut + 1 if 0 < cut < len(text) * 2 // 3 else len(text) // 2
+            forced = (text[:cut] if text[:cut].endswith("-") else text[:cut] + "-", text[cut:])
+        elif len(text) <= 2:
+            one = _fc_text_fit(text, color, ("two", "via"), bw)
+            img.alpha_composite(one, (x0 + (bw - one.width) // 2, (OLD_H - one.height) // 2))
+            return
+    parts = list(forced) if forced else [p_.strip() for p_ in _smart_split(text)]
+    if len(parts) == 1 and " " in text:
+        i = text.rfind(" ", 0, len(text) // 2 + 3)
+        parts = [text[:i], text[i + 1:]] if i > 0 else parts
+    if len(parts) == 1 and len(text) >= 5:            # 한 덩어리 이름도 사진처럼 반으로 ('청주 / 의료원')
+        h = (len(text) + 1) // 2
+        parts = [text[:h], text[h:]]
+    ims = [_fc_text_fit(pt, color, ("two", "via"), bw) for pt in parts[:2]]
+    y = 2 if len(ims) == 2 else (OLD_H - ims[0].height) // 2
+    for im in ims:
+        img.alpha_composite(im, (x0 + (bw - im.width) // 2, y))
+        y += 15
+
+
+def tpl_fullcolor_dir(r, st):
+    """풀컬러 방향 표시 192×32 — 여러 장, 효과 없이 바로 넘어감"""
+    num = str(r.get("no", "")).strip()
+    kind = (r.get("kind") or "일반").strip() or "일반"
+    raw = st.get("_raw") or {}
+    mode = st.get("fc_num") or "구분별 색"
+    ncol = FC_COLORS[FC_KIND.get(kind, "하늘")] if mode in ("구분별 색", "(기본)") else FC_COLORS.get(mode, FC_COLORS["하늘"])
+    if raw.get("num_big") not in (None, "", "(기본)") and COLORS.get(raw["num_big"]):
+        ncol = COLORS[raw["num_big"]]
+    dmode = st.get("fc_dir") or "초록"
+    dcol = ncol if dmode == "번호색과 같게" else FC_COLORS.get(dmode, FC_COLORS["초록"])
+    white = FC_COLORS["흰색"]
+    tcol = COLORS.get(raw.get("end")) if raw.get("end") not in (None, "", "(기본)") and COLORS.get(raw.get("end")) else white
+    sep_white = (st.get("fc_sep") or "초록 –") == "흰색 ▸"
+    br = r.get("_br") or {}
+    pages = []
+
+    def new():
+        return Image.new("RGBA", (OLD_W, OLD_H), (0, 0, 0, 255))
+
+    def add(img, k, ms=None):
+        im = img.convert("RGB")
+        im.info["duration"] = ms or OLD_MS.get(k, 1500)
+        im.info["page_kind"] = k
+        im.info["trans"] = "cut"
+        pages.append(im)
+
+    # 로고(있으면 번호 왼쪽) — 사진의 로고 자리. 이미지는 사용자가 가진 파일을 씀
+    logo_im = None
+    logo = (r.get("logo") or "").strip()
+    if logo:
+        lp = Path(logo).expanduser()
+        if lp.exists():
+            src = Image.open(lp).convert("RGBA")
+            src.thumbnail((40, 30), Image.LANCZOS)
+            logo_im = logo_to_led(lp, src.width, src.height, full=True)
+        else:
+            WARN.append((f"로고 파일 없음: {logo}", 0))
+    lw = (logo_im.width + 3) if logo_im else 0
+    # 사진처럼 판 높이를 채우는 좁고 긴 숫자 (148-1이 판 폭의 40% 남짓)
+    n_img = render_num_orig(num, ncol, 30, 76 - lw, kx=0.78, th=100, track=1, warn=False) if num else None
+    x0 = lw + (n_img.width + 5 if n_img else 2)
+    room = OLD_W - 1 - x0
+
+    def head():
+        img = new()
+        if logo_im:
+            img.alpha_composite(logo_im, (0, (OLD_H - logo_im.height) // 2))
+        if n_img:
+            img.alpha_composite(n_img, (lw, (OLD_H - n_img.height) // 2))
+        return img
+
+    def dir_label(w):
+        ims = [_old_text(ch, dcol, "two", 10 ** 4) for ch in "(방향)"]
+        tot = sum(i.width for i in ims)
+        gap = max(2, min(14, (int(w * 0.8) - tot) // 3))     # 사진처럼 칸 폭만큼 벌림: ( 방 향 )
+        lab = Image.new("RGBA", (tot + gap * 3, max(i.height for i in ims)), (0, 0, 0, 0))
+        xx = 0
+        for i in ims:
+            lab.alpha_composite(i, (xx, lab.height - i.height))
+            xx += i.width + gap
+        return lab if lab.width <= w else squeeze_w(lab, w)
+
+    end_ko = (r.get("end_ko") or "").strip()
+    start_ko = (r.get("start_ko") or "").strip()
+    if end_ko:                                         # ① 번호 + 행선지 + (방 향)
+        img = head()
+        one = _old_text(end_ko, tcol, "top", 10 ** 4)
+        if len(end_ko) <= 5 and one.width <= room:
+            t = _spaced(end_ko, tcol, "top", room)
+        else:
+            t = _fc_text_fit(end_ko, tcol, ("top", "two", "via"), room)
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, 1))
+        lab = dir_label(room)
+        img.alpha_composite(lab, (x0 + (room - lab.width) // 2, 18))
+        add(img, "route", 2000)
+
+    def route_page(a, b, fa=None, fb=None):
+        img = head()
+        sw = 10
+        def nat(t):
+            return _fc_text_fit(t, white, ("two",), 10 ** 4).width if t else 1
+        wa, wb = nat(a), nat(b)                        # 글자 길이에 맞춰 좌우 칸을 나눔 (30~70%)
+        half = int((room - sw) * min(0.7, max(0.3, wa / (wa + wb))))
+        _fc_block(a, white, x0, x0 + half - 1, img, fa)
+        mx = x0 + half + 1
+        d = ImageDraw.Draw(img)
+        if sep_white:
+            d.polygon([(mx + 2, 12), (mx + 7, 16), (mx + 2, 20)], fill=white + (255,))
+        else:
+            d.rectangle([mx, 15, mx + 7, 16], fill=FC_COLORS["초록"] + (255,))
+        _fc_block(b, white, x0 + half + sw + 1, OLD_W - 1, img, fb)
+        add(img, "route", 1800)
+
+    if start_ko and end_ko:                            # ② 번호 + 기점 – 종점
+        route_page(start_ko, end_ko, br.get("start_ko"), br.get("end_ko"))
+    s_en = (r.get("start_en") or "").strip() or (romanize_name(start_ko) if start_ko else "")
+    e_en = (r.get("end_en") or "").strip() or (romanize_name(end_ko) if end_ko else "")
+    if s_en and e_en:                                  # ③ 영문
+        route_page(s_en, e_en, br.get("start_en"), br.get("end_en"))
+    elif e_en:
+        img = head()
+        t = _fc_text_fit(e_en, tcol, ("top", "two"), room)
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, 1))
+        lab = _fc_text_fit("(Direction)", dcol, ("two", "via"), room)
+        img.alpha_composite(lab, (x0 + (room - lab.width) // 2, 18))
+        add(img, "route", 1800)
+    if num:                                            # ④ 번호만 크게 (사진 '5 0')
+        img = new()
+        n = render_num_orig(num, ncol, 30, OLD_W - 8, kx=1.0, th=100, track=1, warn=False)
+        if len(num) == 2 and num.isdigit():             # 두 자리 번호는 사진('5 0')처럼 글자 사이를 넓게
+            digs = [render_num_orig(ch, ncol, 30, 10 ** 4, kx=1.0, th=100, track=0, warn=False) for ch in num]
+            tot = sum(d_.width for d_ in digs)
+            gap = max(4, min(36, OLD_W - 60 - tot))
+            n = Image.new("RGBA", (tot + gap * (len(digs) - 1), max(d_.height for d_ in digs)), (0, 0, 0, 0))
+            xx = 0
+            for d_ in digs:
+                n.alpha_composite(d_, (xx, 0))
+                xx += d_.width + gap
+        img.alpha_composite(n, ((OLD_W - n.width) // 2, (OLD_H - n.height) // 2))
+        add(img, "big", 1500)
+    seats = seats_text(r)
+    if seats:
+        add(seats_page(seats, white, ncol), "seats")
+    if r.get("slogan", "").strip():
+        img = new()
+        t = _fc_text_fit(r["slogan"].strip(), white, ("big", "top", "two"), OLD_W - 8)
+        img.alpha_composite(t, ((OLD_W - t.width) // 2, (OLD_H - t.height) // 2))
+        add(img, "slogan", 2000)
+    return pages
+
+
 TEMPLATES = {
     "jinmyeong_front_192x160": tpl_jinmyeong_front,
     "jinmyeong_uniform_192x160": tpl_jinmyeong_uniform,
     "simple_front_192x160": tpl_simple_front,
     "busan_old_192x32 (부산 구형 3색)": tpl_busan_old,
     "busan_new_192x32 (부산 신형 풀컬러)": tpl_busan_new,
+    "fullcolor_dir_192x32 (풀컬러 방향)": tpl_fullcolor_dir,
 }
 
 
@@ -2544,6 +2751,14 @@ SAMPLE_ROUTES = [
      "busan_old_192x32 (부산 구형 3색)", "일반",
      "구형 3색에도 잔여좌석 화면(빨간 '잔여좌석' + 주황 숫자)을 넣을 수 있음",
      {"seats": "17"}),
+    ("148-1", "학장동", "부산대학교", "", "",
+     "", "fullcolor_dir_192x32 (풀컬러 방향)", "일반",
+     "풀컬러 방향 표시: 번호(구분별 색) + 행선지 + 초록 '(방 향)' → 번호 + 기점 – 종점 → 영문 → 큰 번호. 스타일에서 번호색·(방향)색·구분자(– / ▸) 선택",
+     {}),
+    ("864", "인경리", "청주의료원", "Ingyeong-ri", "Cheongju Medical Center",
+     "", "fullcolor_dir_192x32 (풀컬러 방향)", "좌석",
+     "긴 행선지는 사진처럼 두 줄로 ('청주 / 의료원'). '|'로 줄 바꿀 곳을 직접 정할 수도 있음",
+     {}),
 ]
 
 
@@ -2579,7 +2794,7 @@ def make_sample_excel(path):
         ["· 번호: 행선판에 나올 노선 번호 (숫자·하이픈은 원본형 번호 글꼴, 한글이 섞이면 일반 글꼴)"],
         ["· 기점/종점(한·영): 공백이 있으면 두 줄로 나뉘고, 짧으면 한 줄로 크게 나옵니다."],
         ["· 경유지: 쉼표 = 정류장, 줄바꿈(Alt+Enter / 맥은 ⌃⌥Enter) = 줄. 한글 줄 다음에 영문 줄."],
-        ["· 템플릿: jinmyeong_front_192x160 / busan_old_192x32 (부산 구형 3색) / busan_new_192x32 (부산 신형 풀컬러) / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
+        ["· 템플릿: jinmyeong_front_192x160 / busan_old_192x32 (부산 구형 3색) / busan_new_192x32 (부산 신형 풀컬러) / fullcolor_dir_192x32 (풀컬러 방향) / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
         ["· 구분: 일반 / 급행 / 좌석 / 심야 / 마을 / 순환 (색·반전은 프로그램의 스타일 탭에서 바꿈)"],
         ["· 기점/종점(일·중), 문구, 로고 이미지: 부산 구형 3색 템플릿(busan_old_192x32)의 행선 화면·문구 화면·로고 화면에 쓰임 (비워 두면 그 화면은 생략)"],
         ["· 로고 이미지: PNG·BMP·JPG 파일 경로. 판 크기에 맞춰 줄여 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈)."],
@@ -3030,7 +3245,8 @@ def run_gui():
                   else list(WEIGHTS) if k == "weight" else list(NUM_WEIGHTS) if k == "num_weight"
                   else OLD_BOX_STYLES if k == "old_box" else OLD_GRAD_STYLES if k == "old_grad"
                   else OLD_ARROW_STYLES if k == "old_arrow" else NEW_VIA_STYLES if k == "new_via"
-                  else NEW_EXPRESS_STYLES if k == "new_express" else list(COLORS))
+                  else NEW_EXPRESS_STYLES if k == "new_express" else FC_NUM_STYLES if k == "fc_num"
+                  else FC_DIR_STYLES if k == "fc_dir" else FC_SEP_STYLES if k == "fc_sep" else list(COLORS))
         v = tk.StringVar(value="(기본)")
         ttk.Combobox(sf, textvariable=v, values=values, state="readonly", width=10).grid(
             row=r_, column=c_ * 2 + 1, sticky="w", pady=2)
@@ -4168,9 +4384,11 @@ SELFTEST_ROUTES = [
     {"no": "2029", "start_ko": "녹산", "end_ko": "해운대", "start_en": "Noksan", "end_en": "Haeundae", "kind": "급행",
      "via": "명지,하단,괴정,서면,센텀시티\nMyeongji,Hadan,Goejeong,Seomyeon,Centum City",
      "slogan": "Busan is good", "template": "busan_new_192x32 (부산 신형 풀컬러)"},
+    {"no": "148-1", "start_ko": "학장동", "end_ko": "부산대학교", "seats": "12",
+     "template": "fullcolor_dir_192x32 (풀컬러 방향)"},
 ]
 SELFTEST_STYLES = [{}, {"num_weight": "균일 2픽셀", "arrow_shape": "→"}, {"num_weight": "균일 3픽셀"}]
-SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '37#0': '95a7f5d972e3aead', '99#0': 'ecea271bbd92a6b4', '2029#0': '01386d76aaf6f832', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '37#1': '95a7f5d972e3aead', '99#1': 'ecea271bbd92a6b4', '2029#1': '01386d76aaf6f832', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff', '37#2': '95a7f5d972e3aead', '99#2': 'ecea271bbd92a6b4', '2029#2': '01386d76aaf6f832'}  # 검증 완료된 기준 이미지 해시
+SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '37#0': '95a7f5d972e3aead', '99#0': 'ecea271bbd92a6b4', '2029#0': '01386d76aaf6f832', '148-1#0': 'bd0e0213f905332c', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '37#1': '95a7f5d972e3aead', '99#1': 'ecea271bbd92a6b4', '2029#1': '01386d76aaf6f832', '148-1#1': 'bd0e0213f905332c', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff', '37#2': '95a7f5d972e3aead', '99#2': 'ecea271bbd92a6b4', '2029#2': '01386d76aaf6f832', '148-1#2': 'bd0e0213f905332c'}  # 검증 완료된 기준 이미지 해시
 
 
 def selftest_hashes():
