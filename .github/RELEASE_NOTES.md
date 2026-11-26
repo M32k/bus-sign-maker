@@ -29,7 +29,7 @@ tar xzf BusSignMaker-Linux-x86_64.tar.gz
 
 ## 엑셀 샘플
 
-[`samples/노선샘플.xlsx`](https://github.com/M32k/bus-sign-maker/raw/main/samples/%EB%85%B8%EC%84%A0%EC%83%98%ED%94%8C.xlsx)를 받아서 [파일 → 엑셀 불러오기]로 열어 보세요. 부산 구형 3색·신형 풀컬러(잔여좌석 화면 포함), 급행·심야·마을버스, 측면·후면판, 영문 자동 변환, 압축 경고 예시가 들어 있습니다. 실제 노선으로 만든 `BusSignMaker-busan-routes.xlsx`(부산 급행·심야·일반·마을 8개)와 `BusSignMaker-seoul-routes.xlsx`(서울 간선·지선·광역·심야·마을 8개)도 함께 올라가 있습니다(2026-11-26 공개 노선 정보 기준).
+[`samples/노선샘플.xlsx`](https://github.com/M32k/bus-sign-maker/raw/main/samples/%EB%85%B8%EC%84%A0%EC%83%98%ED%94%8C.xlsx)를 받아서 [파일 → 엑셀 불러오기]로 열어 보세요. 부산 구형 3색·신형 풀컬러(잔여좌석 화면 포함), 급행·심야·마을버스, 측면·후면판, 영문 자동 변환, 압축 경고 예시가 들어 있습니다. 실제 노선으로 만든 `BusSignMaker-busan-routes.xlsx`(부산 급행·심야·일반·마을 8개)와 `BusSignMaker-seoul-routes.xlsx`(서울 간선·지선·광역·심야·마을 8개)도 함께 올라가 있습니다(2026-11-26 부산 BIMS · 서울 버스정보시스템과 대조).
 
 ## 사용법
 

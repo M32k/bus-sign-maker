@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.5.1 (2026-11-26)"
+APP_VERSION = "2.5.2 (2026-11-26)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"

@@ -1,6 +1,7 @@
 """부산 · 서울 실제 노선 샘플 엑셀 만들기 (samples/부산노선_샘플.xlsx, samples/서울노선_샘플.xlsx)
 
-노선 정보(기점·종점·주요 정류장)는 2026-11-26에 공개 노선 정보로 확인한 내용입니다.
+노선 정보(기점·종점·주요 정류장)는 2026-11-26에 부산 BIMS(bus.busan.go.kr)·서울 버스정보시스템(bus.go.kr)의
+노선별 정류소 목록과 대조한 내용입니다(서울 N26의 경유 정류장만 보조 출처 기준).
 노선은 바뀔 수 있으니 실제로 쓸 때는 운수사·지자체 최신 정보로 확인하세요.
 실행:  python3 tools/make_city_samples.py
 """
@@ -13,7 +14,7 @@ import bus_sign_maker as b  # noqa: E402
 
 OLD, NEW, FC = "busan_old_192x32 (부산 구형 3색)", "busan_new_192x32 (부산 신형 풀컬러)", "fullcolor_dir_192x32 (풀컬러 방향)"
 JF, JU, SF = "jinmyeong_front_192x160", "jinmyeong_uniform_192x160", "simple_front_192x160"
-CHECKED = "2026-11-26 조회"
+CHECKED = "2026-11-26 공식 노선정보 대조"
 
 # (번호, 구분, 기점(한), 종점(한), 기점(영), 종점(영), 경유지, 템플릿, 추가 칸, 설명)
 BUSAN = [
@@ -23,24 +24,24 @@ BUSAN = [
      NEW, {"slogan": "Busan is good", "seats": "21"},
      "부산 신형 풀컬러 · 급행. 잔여좌석 21은 화면 예시 값"),
     ("1003", "급행", "기장교리", "부산대학병원", "Gijang Gyo-ri", "PNU Hospital",
-     "수영역,광안역,경성대.부경대역,부산역,남포동,자갈치역\n"
-     "Suyeong Stn,Gwangan Stn,Kyungsung Univ.·Pukyong Nat'l Univ. Stn,Busan Stn,Nampo-dong,Jagalchi Stn",
+     "해운대해수욕장,수영역,광안역,경성대.부경대역,부산역,남포동\n"
+     "Haeundae Beach,Suyeong Stn,Gwangan Stn,Kyungsung Univ. Stn,Busan Stn,Nampo-dong",
      OLD, {}, "부산 구형 3색 · 급행 (기점·종점이 길어 두 줄로 나뉨)"),
-    ("1004", "급행", "김해|구산동", "국제여객터미널", "Gimhae Gusan-dong", "Int'l Passenger Terminal",
-     "김해시청,인제대역,개금,서면역,범일역,부산역\n"
-     "Gimhae City Hall,Inje Univ. Stn,Gaegeum,Seomyeon Stn,Beomil Stn,Busan Stn",
-     FC, {}, "풀컬러 방향 · '김해|구산동'처럼 | 로 줄 바꿀 자리 지정"),
+    ("1004", "급행", "김해", "부산항|국제여객터미널", "Gimhae", "Busan Port Int'l Terminal",
+     "대저역,모라,개금,서면역,범일역,부산역\n"
+     "Daejeo Stn,Mora,Gaegeum,Seomyeon Stn,Beomil Stn,Busan Stn",
+     FC, {}, "풀컬러 방향 · '부산항|국제여객터미널'처럼 | 로 줄 바꿀 자리 지정"),
     ("1002", "심야", "용당공영차고지", "서면", "Yongdang Garage", "Seomyeon",
      "노포역,구서역,부산대학교정문,온천장,사직운동장,부전역\n"
      "Nopo Stn,Guseo Stn,Pusan Nat'l Univ.,Oncheonjang,Sajik Stadium,Bujeon Stn",
      OLD, {}, "1002(심야) · 구분 '심야' 번호 표시"),
-    ("86", "일반", "토곡", "남포동", "Togok", "Nampo-dong",
-     "연산역,부산시청,양정역,서면역,범내골역,국제시장\n"
-     "Yeonsan Stn,Busan City Hall,Yangjeong Stn,Seomyeon Stn,Beomnaegol Stn,Gukje Market",
+    ("86", "일반", "연산9동", "충무동", "Yeonsan 9-dong", "Chungmu-dong",
+     "연산역,부산시청,양정역,서면역,범내골역,국제시장,남포동\n"
+     "Yeonsan Stn,Busan City Hall,Yangjeong Stn,Seomyeon Stn,Beomnaegol Stn,Gukje Market,Nampo-dong",
      NEW, {"seats": "17"}, "부산 신형 풀컬러 · 일반. 잔여좌석 17은 화면 예시 값"),
     ("40", "일반", "청강리공영차고지", "구덕운동장", "Cheonggang", "Gudeok",
      "송정역,센텀시티역,광안역,경성대.부경대역,부산진역,부산역,국제시장\n"
-     "Songjeong Stn,Centum City Stn,Gwangan Stn,Kyungsung Univ.·Pukyong Nat'l Univ. Stn,Busanjin Stn,Busan Stn,"
+     "Songjeong Stn,Centum City Stn,Gwangan Stn,Kyungsung Univ. Stn,Busanjin Stn,Busan Stn,"
      "Gukje Market",
      OLD, {}, "부산 구형 3색 · 경유지가 많아 여러 화면으로 넘어감"),
     ("17", "일반", "태종대", "국제백양아파트", "Taejongdae", "Gukje Baegyang APT",
@@ -68,8 +69,8 @@ SEOUL = [
      "DMC,Gwanghwamun,Sinsa\nNonhyeon,Gangnam,Yangjae",
      JU, {}, "간선 · 진명 균일 192×160"),
     ("143", "일반", "정릉", "개포동", "Jeongneung", "Gaepo-dong",
-     "한성대입구,종로2가\n고속터미널,삼성역,대치역\n"
-     "Hansung Univ.,Jongno 2-ga\nExpress Bus Terminal,Samseong Stn,Daechi Stn",
+     "삼선교,종로2가\n고속터미널,삼성역,대치역\n"
+     "Samseongyo,Jongno 2-ga\nExpress Bus Terminal,Samseong Stn,Daechi Stn",
      SF, {}, "간선 · 단순 전면 192×160"),
     ("7011", "일반", "은평차고지", "중구청", "Eunpyeong Garage", "Jung-gu Office",
      "DMC,합정역,신촌,이대역,서울역,명동역\n"
@@ -82,7 +83,7 @@ SEOUL = [
     ("N26", "심야", "강서공영차고지", "중랑공영차고지", "Gangseo Garage", "Jungnang Garage",
      "개화역,마곡역,당산역\n합정역,홍대입구역,신촌\n"
      "Gaehwa,Magok,Dangsan\nHapjeong,Hongdae,Sinchon",
-     JF, {}, "심야 · N 번호"),
+     JF, {}, "심야 · N 번호 (기점·종점은 공식 확인, 경유 정류장은 보조 출처 기준)"),
     ("종로11", "마을", "삼청동", "서울역", "Samcheong-dong", "Seoul Station",
      "삼청공원,국립민속박물관,경복궁,세종문화회관\n"
      "Samcheong Park,Nat'l Folk Museum,Gyeongbokgung,Sejong Center",
@@ -90,10 +91,11 @@ SEOUL = [
 ]
 
 SOURCES = {
-    "부산": ["https://info.koreacharts.com/citybus/21/contents.html (부산 노선별 정류소 순서)",
-             "https://www.busannavi.net/eng/?p=10173 (1000번대 = 부산 급행버스)"],
-    "서울": ["https://info.koreacharts.com/ (서울 노선별 정류소 순서: 150·360·470·143·7011·9401·N26·종로11)",
-             "https://wiki.openstreetmap.org/wiki/Ko:Bus_routes_in_Seoul (서울 노선 기점·종점 목록)"],
+    "부산": ["https://bus.busan.go.kr/busanBIMS/ (부산 BIMS 노선검색 · 노선별 정류소 목록, 8개 노선 모두 대조)",
+             "https://www.busannavi.net/eng/?p=10173 (1000번대 = 부산 급행버스)",
+             "https://info.koreacharts.com/citybus/21/contents.html (처음 작성할 때 쓴 보조 출처)"],
+    "서울": ["https://bus.go.kr/ (서울 버스정보 노선 및 정류장 검색 · 150·360·470·143·7011·9401·종로11 정류소 목록 대조, N26은 기점·종점만)",
+             "https://info.koreacharts.com/ (N26 경유 정류장 · 처음 작성할 때 쓴 보조 출처)"],
 }
 
 
@@ -122,7 +124,7 @@ def write(path, city, rows):
     ws.freeze_panes = "B2"
     g = wb.create_sheet("안내")
     for line in [[f"{city} 실제 노선 샘플 — 노선이미지 생성기"], [""],
-                 [f"· 기점·종점·주요 정류장은 {CHECKED} 공개 노선 정보 기준입니다. 노선은 바뀔 수 있으니 실제 사용 전 최신 정보로 확인하세요."],
+                 [f"· 기점·종점·주요 정류장은 {CHECKED} 결과입니다(부산 BIMS · 서울 버스정보시스템). 노선은 바뀔 수 있으니 실제 사용 전 최신 정보로 확인하세요."],
                  ["· 경유지는 주요 정류장만 골랐습니다. 첫 줄(들) = 한글, 다음 줄(들) = 영문."],
                  ["· 잔여좌석·문구 값은 화면 기능을 보여 주려고 넣은 예시입니다."],
                  ["· 프로그램에서 [파일 → 엑셀 불러오기]로 열면 됩니다. 열 제목만 맞으면 순서는 바뀌어도 됩니다."],
