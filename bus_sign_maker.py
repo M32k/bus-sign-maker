@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.4.0 (2026-11-25)"
+APP_VERSION = "2.5.0 (2026-11-26)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -2940,6 +2940,13 @@ def setup_theme(root, name, ttk):
                  lightcolor=P["accent"], darkcolor=P["accent"], padding=(12, 5), font=F["bold"], focuscolor=P["accent"], width=0)
     st.map("ToolAccent.TButton", background=[("active", P["accent_hi"])], foreground=[("active", P["on_accent"])])
     st.configure("Small.TButton", padding=(7, 3), font=F["small"], width=0)
+    # 묶음 툴바 (프로젝트 · 엑셀 · 도구 · 출력 · 편집): 작은 제목 + 테두리 안의 버튼 줄
+    st.configure("GroupCap.TLabel", background=P["header"], foreground=P["muted"], font=(fam, size - 2))
+    st.configure("Seg.TFrame", background=P["input"], bordercolor=P["border"], relief="solid", borderwidth=1)
+    st.configure("Seg.TButton", background=P["input"], foreground=P["text"], bordercolor=P["input"],
+                 lightcolor=P["input"], darkcolor=P["input"], padding=(8, 3), focuscolor=P["input"], width=0)
+    st.map("Seg.TButton", background=[("pressed", P["border"]), ("active", P["surface2"])],
+           bordercolor=[("active", P["surface2"])])
     # 입력 칸
     for w in ("TEntry", "TCombobox", "TSpinbox"):
         st.configure(w, fieldbackground=P["input"], foreground=P["text"], bordercolor=P["border"],
@@ -3100,6 +3107,9 @@ def run_gui():
     brand.pack(side="left", padx=(0, 18))
     ttk.Label(brand, text="노선이미지 생성기", style="Brand.TLabel").pack(anchor="w")
     ttk.Label(brand, text=f"BusSign Maker · v{APP_VERSION.split()[0]}", style="BrandSub.TLabel").pack(anchor="w")
+    acts = ttk.Frame(header, style="Header.TFrame")       # 오른쪽 끝: 현재 저장 · 전체 생성 (항상 보이게 먼저 배치)
+    acts.pack(side="right", padx=(10, 0))
+    gen_text = tk.StringVar(value="전체 생성")
     bar = ttk.Frame(header, style="Header.TFrame")
     bar.pack(side="left", fill="both", expand=True)
     ttk.Separator(root, orient="horizontal").pack(fill="x")
@@ -3120,9 +3130,15 @@ def run_gui():
     ttk.Label(lhead, text="노선", style="Section.TLabel").pack(side="left")
     lcount = ttk.Label(lhead, text="0", style="Badge.TLabel")
     lcount.pack(side="left", padx=6)
+    findf = ttk.Frame(lf)
+    findf.pack(fill="x", pady=(0, 8))
+    ttk.Label(findf, text="찾기", style="Muted.TLabel").pack(side="left", padx=(0, 6))
+    find_var = tk.StringVar()
+    find_e = ttk.Entry(findf, textvariable=find_var, width=10)
+    find_e.pack(side="left", fill="x", expand=True)
     lbf = ttk.Frame(lf)
     lbf.pack(fill="both", expand=True)
-    lb = tk.Listbox(lbf, width=14, exportselection=False)
+    lb = tk.Listbox(lbf, width=21, exportselection=False)
     lb.pack(side="left", fill="both", expand=True)
     sb = ttk.Scrollbar(lbf, command=lb.yview)
     sb.pack(side="left", fill="y")
@@ -3175,46 +3191,63 @@ def run_gui():
     for t_ in (tab_edit, tab_style, tab_font, tab_out):
         t_.columnconfigure(1, weight=1)
 
-    # ── 편집 탭 ──
+    # ── 편집 탭 (묶음별 카드) ──
     vars_ = {}
-    fields = [("no", "번호"), ("start_ko", "기점(한)"), ("end_ko", "종점(한)"),
-              ("start_en", "기점(영)"), ("end_en", "종점(영)")]
-    for i, (k, label) in enumerate(fields):
-        ttk.Label(tab_edit, text=label).grid(row=i, column=0, sticky="e", padx=3, pady=2)
-        v = tk.StringVar()
-        ttk.Entry(tab_edit, textvariable=v, width=30).grid(row=i, column=1, sticky="we", pady=2)
-        vars_[k] = v
-    ttk.Label(tab_edit, text="구분").grid(row=5, column=0, sticky="e", padx=3)
+
+    def edit_box(title, row):
+        f = ttk.LabelFrame(tab_edit, text=title, padding=8)
+        f.grid(row=row, column=0, columnspan=2, sticky="we", pady=(0, 8))
+        return f
+
+    def ent(parent, key, width=12):
+        v = vars_.setdefault(key, tk.StringVar())
+        return ttk.Entry(parent, textvariable=v, width=width)
+
+    bf_ = edit_box("기본 정보", 0)
+    bf_.columnconfigure(1, weight=1)
+    bf_.columnconfigure(3, weight=1)
+    ttk.Label(bf_, text="번호").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
+    ent(bf_, "no", 10).grid(row=0, column=1, sticky="we", pady=2)
+    ttk.Label(bf_, text="구분").grid(row=0, column=2, sticky="e", padx=(10, 4))
     kind_var = tk.StringVar(value="일반")
-    ttk.Combobox(tab_edit, textvariable=kind_var, values=KINDS, state="readonly", width=10).grid(
-        row=5, column=1, sticky="w", pady=2)
-    ttk.Label(tab_edit, text="경유지").grid(row=6, column=0, sticky="ne", padx=3)
-    via_txt = tk.Text(tab_edit, width=30, height=6, wrap="word", undo=False)
-    via_txt.grid(row=6, column=1, sticky="we", pady=2)
-    ttk.Label(tab_edit, text="쉼표 = 정류장, 줄바꿈 = 줄 (한글 줄 → 영문 줄)", style="Muted.TLabel").grid(
-        row=7, column=1, sticky="w")
-    ttk.Label(tab_edit, text="템플릿").grid(row=8, column=0, sticky="e", padx=3)
+    ttk.Combobox(bf_, textvariable=kind_var, values=KINDS, state="readonly", width=7).grid(
+        row=0, column=3, sticky="we", pady=2)
+    ttk.Label(bf_, text="템플릿").grid(row=1, column=0, sticky="e", padx=(0, 4))
     tpl_var = tk.StringVar(value="jinmyeong_front_192x160")
-    tpl_cb = ttk.Combobox(tab_edit, textvariable=tpl_var, values=all_template_names(), state="readonly", width=30)
-    tpl_cb.grid(row=8, column=1, sticky="we", pady=2)
-    xf = ttk.LabelFrame(tab_edit, text="추가 칸 — 부산 구형 3색 / 신형 풀컬러 템플릿", padding=6)
-    xf.grid(row=9, column=0, columnspan=2, sticky="we", pady=(8, 0))
+    tpl_cb = ttk.Combobox(bf_, textvariable=tpl_var, values=all_template_names(), state="readonly", width=28)
+    tpl_cb.grid(row=1, column=1, columnspan=3, sticky="we", pady=2)
+
+    sef = edit_box("기점 · 종점", 1)
+    sef.columnconfigure(1, weight=1)
+    sef.columnconfigure(2, weight=1)
+    ttk.Label(sef, text="기점", style="Muted.TLabel").grid(row=0, column=1, sticky="w")
+    ttk.Label(sef, text="종점", style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=(6, 0))
+    for i, (lang, a_, b_) in enumerate([("한글", "start_ko", "end_ko"), ("영어", "start_en", "end_en"),
+                                        ("日本", "start_ja", "end_ja"), ("中文", "start_zh", "end_zh")]):
+        ttk.Label(sef, text=lang).grid(row=i + 1, column=0, sticky="e", padx=(0, 6), pady=2)
+        ent(sef, a_).grid(row=i + 1, column=1, sticky="we", pady=2)
+        ent(sef, b_).grid(row=i + 1, column=2, sticky="we", pady=2, padx=(6, 0))
+    ttk.Label(sef, text="'김해|구산동'처럼 | 를 넣으면 두 줄 화면에서 그 자리에서 줄을 바꿉니다. "
+                        "日·中을 비워 두면 사전에서 찾아 넣습니다.",
+              style="Muted.TLabel", wraplength=320, justify="left").grid(row=5, column=0, columnspan=3, sticky="w",
+                                                                        pady=(4, 0))
+
+    vf_ = edit_box("경유지", 2)
+    vf_.columnconfigure(0, weight=1)
+    via_txt = tk.Text(vf_, width=30, height=4, wrap="word", undo=False)
+    via_txt.grid(row=0, column=0, sticky="we")
+    ttk.Label(vf_, text="쉼표 = 정류장, 줄바꿈 = 줄 (한글 줄 → 영문 줄)", style="Muted.TLabel").grid(
+        row=1, column=0, sticky="w", pady=(4, 0))
+
+    xf = edit_box("추가 칸 — 부산 구형 · 신형 · 풀컬러", 3)
     xf.columnconfigure(1, weight=1)
     xf.columnconfigure(3, weight=1)
-    for i, (k, label) in enumerate(EXTRA_FIELDS):
-        ttk.Label(xf, text=label).grid(row=i // 2, column=(i % 2) * 2, sticky="e", padx=2, pady=1)
-        v = tk.StringVar()
-        ttk.Entry(xf, textvariable=v, width=13).grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="we", pady=1)
-        vars_[k] = v
-    ttk.Label(xf, text="문구").grid(row=2, column=0, sticky="e", padx=2)
-    vars_["slogan"] = tk.StringVar()
-    ttk.Entry(xf, textvariable=vars_["slogan"], width=13).grid(row=2, column=1, sticky="we", pady=1)
-    ttk.Label(xf, text="잔여좌석").grid(row=2, column=2, sticky="e", padx=2)
-    vars_["seats"] = tk.StringVar()
-    ttk.Entry(xf, textvariable=vars_["seats"], width=13).grid(row=2, column=3, sticky="we", pady=1)
-    ttk.Label(xf, text="로고 이미지").grid(row=3, column=0, sticky="e", padx=2)
-    vars_["logo"] = tk.StringVar()
-    ttk.Entry(xf, textvariable=vars_["logo"], width=13).grid(row=3, column=1, columnspan=2, sticky="we", pady=1)
+    ttk.Label(xf, text="문구").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
+    ent(xf, "slogan").grid(row=0, column=1, sticky="we", pady=2)
+    ttk.Label(xf, text="잔여좌석").grid(row=0, column=2, sticky="e", padx=(10, 4))
+    ent(xf, "seats", 5).grid(row=0, column=3, sticky="we", pady=2)
+    ttk.Label(xf, text="로고").grid(row=1, column=0, sticky="e", padx=(0, 4))
+    ent(xf, "logo").grid(row=1, column=1, columnspan=2, sticky="we", pady=2)
 
     def pick_logo():
         p = filedialog.askopenfilename(title="로고 이미지 (PNG·BMP·JPG)",
@@ -3222,13 +3255,12 @@ def run_gui():
         if p:
             vars_["logo"].set(p)
 
-    ttk.Button(xf, text="찾기…", width=5, command=pick_logo).grid(row=3, column=3, sticky="w")
-    ttk.Label(xf, text="로고는 판 크기에 맞춰 줄여 한 장면으로 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈). "
-                       "잔여좌석에 숫자를 넣으면 '잔여좌석 24' 화면이 추가됩니다. "
-                       "기점·종점에 '김해|구산동'처럼 | 를 넣으면 두 줄 화면에서 그 자리에서 줄을 바꿉니다.",
-              style="Muted.TLabel", wraplength=310, justify="left").grid(row=4, column=0, columnspan=4, sticky="w")
-    rom_frame = ttk.LabelFrame(tab_edit, text="영문 자동 변환 (국어의 로마자 표기법 + 사전)", padding=6)
-    rom_frame.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8, 0))
+    ttk.Button(xf, text="찾기…", style="Small.TButton", command=pick_logo).grid(row=1, column=3, sticky="w", padx=(6, 0))
+    ttk.Label(xf, text="로고는 판 크기에 맞춰 줄여 한 장면으로 넣습니다(구형은 3색으로 바꿈). "
+                       "잔여좌석에 숫자를 넣으면 '잔여좌석 24' 화면이 추가됩니다.",
+              style="Muted.TLabel", wraplength=320, justify="left").grid(row=2, column=0, columnspan=4, sticky="w",
+                                                                        pady=(4, 0))
+    rom_frame = edit_box("영문 자동 변환 (국어의 로마자 표기법 + 사전)", 4)
     rom_over = tk.BooleanVar(value=False)
     ttk.Checkbutton(rom_frame, text="이미 적힌 영문도 덮어쓰기", variable=rom_over).pack(anchor="w")
     rf2 = ttk.Frame(rom_frame)
@@ -3384,14 +3416,78 @@ def run_gui():
     hsb.pack(side="bottom", fill="x")
     canvas.pack(side="left", fill="both", expand=True)
     img_item = canvas.create_image(0, 0, anchor="nw")
+    # 쪽 썸네일 줄: 모든 쪽을 작게 늘어놓고, 누르면 그 쪽으로 이동 (쪽 종류 · 표시 시간 표시)
+    STRIP_H, THUMB_H, THUMB_W = 70, 36, 150
+    strip_wrap = ttk.Frame(pv)
+    strip_wrap.pack(fill="x", pady=(8, 0))
+    strip = tk.Canvas(strip_wrap, height=STRIP_H, highlightthickness=0, background=PAL["canvas"])
+    strip_sb = ttk.Scrollbar(strip_wrap, orient="horizontal", command=strip.xview)
+    strip.configure(xscrollcommand=strip_sb.set)
+    strip.pack(fill="x")
+    strip_sb.pack(fill="x")
+    PAGE_KIND_LABEL = {"big": "큰 번호", "route": "행선", "via": "경유지", "seats": "잔여좌석", "slogan": "문구",
+                       "logo": "로고"}
+    S["strip_key"], S["thumbs"], S["thumb_boxes"] = None, [], []
+
+    def draw_strip():
+        import hashlib
+        pages = S.get("pages") or []
+        key = (tuple(hashlib.md5(p.tobytes()).hexdigest() for p in pages), bool(led_var.get()), PAL["canvas"])
+        if S["strip_key"] != key:
+            S["strip_key"] = key
+            strip.delete("all")
+            S["thumbs"], S["thumb_boxes"] = [], []
+            x = 10
+            for i, p in enumerate(pages):
+                pr = p.convert("RGB")
+                sc = min(THUMB_H / pr.height, THUMB_W / pr.width)
+                tw, th = max(1, round(pr.width * sc)), max(1, round(pr.height * sc))
+                if led_var.get() and sc >= 0.9:
+                    im = led_look(pr, max(2, int(sc) + 1)).resize((tw, th), Image.LANCZOS)
+                else:
+                    im = pr.resize((tw, th), Image.NEAREST if sc >= 1 else Image.BOX)
+                ph = ImageTk.PhotoImage(im)
+                S["thumbs"].append(ph)
+                tag = f"pg{i}"
+                y0 = 8 + (THUMB_H - th) // 2
+                strip.create_image(x, y0, anchor="nw", image=ph, tags=(tag,))
+                kind = PAGE_KIND_LABEL.get(p.info.get("page_kind"), "")
+                dur = p.info.get("duration")
+                cap = f"{i + 1} {kind}".strip() + (f" · {dur / 1000:.1f}초" if dur and len(pages) > 1 else "")
+                strip.create_text(x, 8 + THUMB_H + 6, anchor="nw", text=cap, fill="#b4bac6", font=FON["small"],
+                                  tags=(tag,))
+                S["thumb_boxes"].append((x - 4, 4, x + tw + 4, 8 + THUMB_H + 4))
+                strip.tag_bind(tag, "<Button-1>", lambda e, i=i: page_var.set(str(i + 1)))
+                x += max(tw, 88) + 12
+            strip.configure(scrollregion=(0, 0, x, STRIP_H))
+        strip.delete("sel")
+        boxes = S["thumb_boxes"]
+        if boxes and 0 <= S["page"] < len(boxes):
+            bx = boxes[S["page"]]
+            strip.create_rectangle(*bx, outline=PAL["accent"], width=2, tags=("sel",))
+            total = max(1, boxes[-1][2] + 16)
+            vw = max(1, strip.winfo_width())
+            left, right = strip.canvasx(0), strip.canvasx(vw)
+            if bx[0] < left or bx[2] > right:              # 고른 쪽이 보이도록 줄을 넘김
+                strip.xview_moveto(max(0.0, (bx[0] - 20) / total))
+
     info = tk.StringVar()
     warn_var = tk.StringVar()
-    ttk.Label(pv, textvariable=info, style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
+    info_lbl = ttk.Label(pv, textvariable=info, style="Muted.TLabel")
+    info_lbl.pack(anchor="w", pady=(8, 0))
     warn_lbl = ttk.Label(pv, textvariable=warn_var, style="Warn.TLabel", wraplength=760, justify="left")
     warn_lbl.pack(anchor="w")
     pv.bind("<Configure>", lambda e: warn_lbl.configure(wraplength=max(200, e.width - 30)), add="+")
     legend = ttk.Label(pv, text="", style="Muted.TLabel")
     legend.pack(anchor="w")
+    # 아래쪽 줄(썸네일·정보·경고)을 먼저 아래에서부터 배치 → 작은 창에서도 잘리지 않고, 남는 높이는 미리보기 칸이 씀
+    for w_ in (cwrap, strip_wrap, info_lbl, warn_lbl, legend):
+        w_.pack_forget()
+    legend.pack(side="bottom", anchor="w")
+    warn_lbl.pack(side="bottom", anchor="w")
+    info_lbl.pack(side="bottom", anchor="w", pady=(6, 0))
+    strip_wrap.pack(side="bottom", fill="x", pady=(8, 0))
+    cwrap.pack(side="top", fill="both", expand=True, pady=(10, 0))
 
     def zoom_now(img_w=192, img_h=160):
         v = zoom_var.get()
@@ -3437,11 +3533,15 @@ def run_gui():
 
     def label_of(r):
         k = r.get("kind")
-        return (r.get("no") or "(새 노선)") + (f"  [{k}]" if k and k != "일반" else "")
+        s_ = (r.get("start_ko") or "").replace("|", "").strip()
+        e_ = (r.get("end_ko") or "").replace("|", "").strip()
+        path = f"{s_}→{e_}" if s_ and e_ else (e_ or s_)
+        return (r.get("no") or "(새 노선)") + (f"  {path}" if path else "") + (f"  [{k}]" if k and k != "일반" else "")
 
     def refill_list(keep=None):
         lcount.config(text=str(len(S["routes"])))
         count_var.set(f"노선 {len(S['routes'])}개")
+        gen_text.set(f"전체 생성 · {len(S['routes'])}개" if S["routes"] else "전체 생성")
         lb.delete(0, "end")
         for r in S["routes"]:
             lb.insert("end", label_of(r))
@@ -3540,6 +3640,8 @@ def run_gui():
         if r is None:
             canvas.itemconfig(img_item, image="")
             info.set("노선이 없습니다. [새 노선] 또는 엑셀/프로젝트를 불러오세요.")
+            S["pages"] = []
+            draw_strip()
             return
         try:
             pages = render_current()
@@ -3587,6 +3689,7 @@ def run_gui():
         names = file_names(r, n, settings.get("name_pattern"))
         info.set(f"{img.width}x{img.height} px  |  {r.get('template')}  |  {names[S['page']]}"
                  f"{'  |  편집한 점 ' + str(len((r.get('edits') or {}).get(str(S['page']), {}))) + '개' if (r.get('edits') or {}).get(str(S['page'])) else ''}{extra}")
+        draw_strip()
         ws = [w for w in S.get("warns", []) if w[1] > 0]
         warn_var.set("⚠ 압축됨: " + " / ".join(f"{t} ({ratio * 100:.0f}%)" for t, ratio in ws) if ws else "")
 
@@ -3770,6 +3873,29 @@ def run_gui():
         refill_list(i + d)
         commit()
 
+    def find_route(step=0):
+        """번호·지명(한글/영문)으로 노선 찾기. 엔터 = 다음 것"""
+        q = find_var.get().strip().lower()
+        if not q or not S["routes"]:
+            return
+        n = len(S["routes"])
+        start = ((S["sel"] or 0) + step) % n
+        for k in range(n):
+            i = (start + k) % n
+            r = S["routes"][i]
+            hay = " ".join([label_of(r), r.get("start_en", ""), r.get("end_en", ""), r.get("via", "")]).lower()
+            if q in hay:
+                if i != S["sel"]:
+                    if S["commit_job"]:
+                        root.after_cancel(S["commit_job"]); commit()
+                    refill_list(i)
+                    load_form(i)
+                status.set(f"찾음: {label_of(r)}  (엔터 = 다음)")
+                return
+        status.set(f"'{find_var.get().strip()}' 노선을 찾지 못했습니다")
+
+    find_var.trace_add("write", lambda *_: find_route(0))
+    find_e.bind("<Return>", lambda e: find_route(1))
     ttk.Button(lbtn, text="＋ 새 노선", style="Accent.TButton", command=new_route).pack(fill="x", pady=(0, 6))
     lrow = ttk.Frame(lbtn)
     lrow.pack(fill="x")
@@ -4267,28 +4393,38 @@ def run_gui():
     menubar.add_cascade(label="출력", menu=m_out)
     root.config(menu=menubar)
 
-    def tool_group(items, last=False):
-        for text, cmd, sty in items:
-            ttk.Button(bar, text=text, command=cmd, style=sty,
+    def tool_group(title, items):
+        """작은 제목 + 테두리 안 버튼 줄. 좁은 창에서는 flow_layout 이 묶음째 다음 줄로 넘김"""
+        g_ = ttk.Frame(bar, style="Header.TFrame")
+        ttk.Label(g_, text=title, style="GroupCap.TLabel").pack(anchor="w", padx=(3, 0))
+        row_ = ttk.Frame(g_, style="Seg.TFrame", padding=2)
+        row_.pack(anchor="w")
+        for text, cmd in items:
+            ttk.Button(row_, text=text, command=cmd, style="Seg.TButton",
                        width=3 if len(text) == 1 else None).pack(side="left", padx=1)
-        if not last:
-            ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=4)
+        g_.pack(side="left", padx=(0, 10))
+        return row_
 
-    T, TA = "Tool.TButton", "ToolAccent.TButton"
-    tool_group([("열기", open_project, T), ("저장", save_project_cmd, T), ("엑셀 불러오기", load_xl, T)])
-    tool_group([("현재 저장(BMP)", save_current, T), ("전체 생성", save_all, TA),
-                ("출력폴더 열기", lambda: open_folder(out_dir()), T), ("USB로 복사", copy_usb, T),
-                ("GIF 저장", save_gif_cmd, T)])
-    tool_group([("원본 비교", load_compare, T), ("글자 보정", glyph_editor, T)])
-    tool_group([("↶", undo, T), ("↷", redo, T)], last=True)
+    tool_group("프로젝트", [("열기", open_project), ("저장", save_project_cmd)])
+    tool_group("엑셀", [("불러오기", load_xl), ("내보내기", export_xl)])
+    tool_group("도구", [("글자 보정", glyph_editor), ("원본 비교", load_compare), ("영문 채우기", romanize_current)])
+    tool_group("출력", [("출력 폴더", lambda: open_folder(out_dir())), ("USB 복사", copy_usb), ("GIF", save_gif_cmd)])
+    tool_group("편집", [("↶", undo), ("↷", redo)])
+    view_row = tool_group("보기", [])
+    ttk.Button(acts, text="현재 저장 (BMP)", command=save_current, style="Tool.TButton").pack(side="left", padx=(0, 6))
+    gen_btn = ttk.Button(acts, textvariable=gen_text, command=save_all, style="ToolAccent.TButton")
+    gen_btn.pack(side="left")
+    gen_text.set(f"전체 생성 · {len(S['routes'])}개" if S["routes"] else "전체 생성")
 
     def apply_theme(*_):
         nonlocal PAL, FON
         PAL, FON = setup_theme(root, theme_var.get(), ttk)
-        recolor_tk(root, PAL, FON, keep=(canvas,))
+        recolor_tk(root, PAL, FON, keep=(canvas, strip))
         for c_ in scrollers:
             c_.configure(background=PAL["surface"])
         canvas.configure(background=PAL["canvas"])
+        strip.configure(background=PAL["canvas"])
+        draw_strip()
         theme_btn.config(text="☀ 라이트" if theme_var.get() == "다크" else "☾ 다크")
         settings["theme"] = theme_var.get()
         try:
@@ -4296,10 +4432,9 @@ def run_gui():
         except Exception:
             pass
 
-    ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=4)
-    theme_btn = ttk.Button(bar, text="☀ 라이트", style="Tool.TButton", width=8,
+    theme_btn = ttk.Button(view_row, text="☀ 라이트", style="Seg.TButton",
                            command=lambda: theme_var.set("라이트" if theme_var.get() == "다크" else "다크"))
-    theme_btn.pack(side="left")
+    theme_btn.pack(side="left", padx=1)
     flow_layout(bar)
     theme_var.trace_add("write", apply_theme)
     m_view = tk.Menu(menubar, tearoff=0)
