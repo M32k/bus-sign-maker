@@ -142,7 +142,10 @@ jobs:
           path: out
 
       - name: 엑셀 샘플을 영문 이름으로 (첨부 파일 이름의 한글이 깨지지 않게)
-        run: cp "samples/노선샘플.xlsx" out/BusSignMaker-sample-routes.xlsx
+        run: |
+          cp "samples/노선샘플.xlsx" out/BusSignMaker-sample-routes.xlsx
+          cp "samples/부산노선_샘플.xlsx" out/BusSignMaker-busan-routes.xlsx
+          cp "samples/서울노선_샘플.xlsx" out/BusSignMaker-seoul-routes.xlsx
 
       - name: 릴리스 만들기
         uses: softprops/action-gh-release@v2
@@ -154,3 +157,5 @@ jobs:
             out/macos/BusSignMaker-macOS-AppleSilicon.dmg
             out/linux/BusSignMaker-Linux-x86_64.tar.gz
             out/BusSignMaker-sample-routes.xlsx
+            out/BusSignMaker-busan-routes.xlsx
+            out/BusSignMaker-seoul-routes.xlsx
