@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 import bus_sign_maker as b  # noqa: E402
 
 OLD, NEW, FC = "busan_old_192x32 (부산 구형 3색)", "busan_new_192x32 (부산 신형 풀컬러)", "fullcolor_dir_192x32 (풀컬러 방향)"
+SIDE = "busan_side_180x40 (부산 신형 측면)"
 JF, JU, SF = "jinmyeong_front_192x160", "jinmyeong_uniform_192x160", "simple_front_192x160"
 CHECKED = "2026-11-26 공식 노선정보 대조"
 
@@ -38,7 +39,7 @@ BUSAN = [
     ("86", "일반", "연산9동", "충무동", "Yeonsan 9-dong", "Chungmu-dong",
      "연산역,부산시청,양정역,서면역,범내골역,국제시장,남포동\n"
      "Yeonsan Stn,Busan City Hall,Yangjeong Stn,Seomyeon Stn,Beomnaegol Stn,Gukje Market,Nampo-dong",
-     NEW, {"seats": "17"}, "부산 신형 풀컬러 · 일반. 잔여좌석 17은 화면 예시 값"),
+     SIDE, {"seats": "17", "slogan": "Busan is good"}, "부산 신형 측면 180×40 · 일반. 경유지가 왼쪽으로 흐름(재생·GIF). 잔여좌석 17은 화면 예시 값"),
     ("40", "일반", "청강리공영차고지", "구덕운동장", "Cheonggang", "Gudeok",
      "송정역,센텀시티역,광안역,경성대.부경대역,부산진역,부산역,국제시장\n"
      "Songjeong Stn,Centum City Stn,Gwangan Stn,Kyungsung Univ. Stn,Busanjin Stn,Busan Stn,"
