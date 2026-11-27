@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-APP_VERSION = "2.5.2 (2026-11-26)"
+APP_VERSION = "2.6.0 (2026-11-27)"
 APP_DIR = Path.home() / "BusSignMaker"
 OUT_DIR = APP_DIR / "output"
 PRESET_FILE = APP_DIR / "presets.json"
@@ -1494,7 +1494,7 @@ def _new_colors(st):
             "express": st.get("new_express") or "흰색"}
 
 
-def _num_fixed_gap(num, color, h, max_w, gap=1):
+def _num_fixed_gap(num, color, h, max_w, gap=1, kx=None):
     """숫자를 한 자씩 그려서 글자 사이를 정확히 gap칸으로 붙임 (신형 번호: 1칸).
     넘치면 원래 방식(최근접 압축)으로 판 폭에 맞춤"""
     import numpy as np
@@ -1502,7 +1502,7 @@ def _num_fixed_gap(num, color, h, max_w, gap=1):
     for ch in num:
         if ch == " ":
             parts.append(np.zeros((h, max(2, h // 6)), bool)); continue
-        g = render_num_orig(ch, color, h, 10 ** 4, kx=0.95, th=100, track=0, warn=False)
+        g = render_num_orig(ch, color, h, 10 ** 4, kx=0.95 * (kx if kx and ch != "-" else 1), th=100, track=0, warn=False)
         m = np.asarray(g)[:, :, 3] > 0
         xs = np.where(m.any(0))[0]
         if len(xs):
@@ -1525,9 +1525,10 @@ def _num_fixed_gap(num, color, h, max_w, gap=1):
     return im
 
 
-def _new_num_paint(num, c, kind, st, h=28, max_w=92, track=-2):
-    """번호 그리기 + 색 (기본 흰색). 사용자가 확인한 사진 모양: 높이 28, 굵은 숫자, 숫자 사이 1칸"""
-    n = _num_fixed_gap(num, (255, 255, 255), h, max_w)
+def _new_num_paint(num, c, kind, st, h=28, max_w=92, track=-2, gap=1, kx=None):
+    """번호 그리기 + 색 (기본 흰색). 사용자가 확인한 사진 모양: 높이 28, 굵은 숫자, 숫자 사이 1칸.
+    kx: 숫자 폭 비율 (측면판처럼 번호가 홀쭉할 때, 숫자 사이 칸은 그대로 두고 숫자만 좁힘)"""
+    n = _num_fixed_gap(num, (255, 255, 255), h, max_w, gap=gap, kx=kx)
     custom = (st.get("kinds") or {}).get(kind)
     if custom and (custom.get("color", "(기본)"), bool(custom.get("invert"))) != KIND_DEFAULTS.get(kind, ("(기본)", False)):
         # 스타일 탭에서 구분 색을 기본값과 다르게 바꿨으면 그것
@@ -1788,6 +1789,243 @@ def tpl_busan_new(r, st):
     return pages
 
 
+# ───────────────────────── 부산 신형 측면 (180×40) ─────────────────────────
+# 영상(부산시내버스 전광판 작동, 2025.09.03 · 99번 부산진시장행 측면)을 점 단위로 읽어 만든 배치.
+#  판: 가로 180 × 세로 40칸 (위쪽 세 줄에서 점 180개, 세로 40줄)
+#  [번호만 크게(40칸, 숫자 사이 9칸)] → [번호 + 'OO행'] → [+ 영문] → [+ 중문] → [+ 일문]
+#  → [번호 + 'OO행' + 경유지가 왼쪽으로 흐름(초당 약 35칸, 처음 0.75초·끝 1초 멈춤)] → 잔여좌석 → 로고 → 'Busan is good'
+#  번호(왼쪽): 높이 38칸, 숫자 20칸·사이 3칸, 경유지는 48번째 칸부터.  윗줄 'OO행': 글자 높이 약 19칸.  아랫줄: 약 15칸.  ▶ = 하늘색
+SIDE_W, SIDE_H = 180, 40
+SIDE_SCROLL = {"speed": 35, "hold0": 750, "hold1": 1000, "step": 2}   # 칸/초, 처음·끝 멈춤(ms), 한 번에 움직이는 칸
+OLD_ROWS["sdest"] = (21, 21, 11, 2)      # 측면 윗줄 'OO행' (잉크 높이 ≈ 19칸, 세로획은 오른쪽으로 1칸 굵게 → 3칸)
+OLD_ROWS["sdest2"] = (19, 19, 10, 2)     # 길어서 안 들어갈 때
+OLD_ROWS["ssub"] = (16, 17, 8, 2)        # 측면 아랫줄 경유지·번역 (잉크 높이 ≈ 15칸, 글자 간격 17칸: 영상 '안락교' 130·147·164번째 칸)
+OLD_ROWS["ssub1"] = (16, 16, 8, 1)       # 한자(釜山鎮市場)는 획 1칸이어야 안 뭉개짐
+
+
+def _thick_v(im):
+    """세로획만 오른쪽으로 1칸 굵게 (영상: 윗줄 글자 세로획 3칸 · 가로획 2칸)"""
+    import numpy as np
+    a = np.asarray(im.convert("RGBA"))
+    out = np.zeros((a.shape[0], a.shape[1] + 1, 4), np.uint8)
+    out[:, :-1] = a
+    m = a[:, :, 3] > 0
+    add = np.zeros(out.shape[:2], bool)
+    add[:, 1:] = m
+    add &= out[:, :, 3] == 0
+    src = np.zeros_like(out)
+    src[:, 1:] = a
+    out[add] = src[add]
+    return Image.fromarray(out, "RGBA")
+
+
+def _side_spaced(text, color, row, room, gap=3):
+    """한 자씩 그려 gap칸씩 띄움 (영상: '부산진시장행' 글자 사이 3~4칸). 넘치면 None"""
+    chars = [ch for ch in text if not ch.isspace()]
+    if not chars:
+        return None
+    ims = [_thick_v(_old_text(ch, color, row, 10 ** 4)) for ch in chars]
+    if gap is None:                                  # 짧은 이름은 조금 벌림 (3~6칸)
+        spare = room - sum(i.width for i in ims)
+        gap = max(3, min(6, spare // max(1, 2 * (len(ims) - 1))))
+    w = sum(i.width for i in ims) + gap * (len(ims) - 1)
+    if w > room:
+        return None
+    h = max(i.height for i in ims)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    x = 0
+    for im in ims:
+        out.alpha_composite(im, (x, h - im.height))
+        x += im.width + gap
+    return out
+
+
+def _side_dest(dest, color, room):
+    """윗줄 'OO행': 큰 글씨(19칸) 3칸 띄움 → 2칸 → 1칸 → '행' 빼기 → 작은 글씨 → 좁힘"""
+    wide = has_hangul(dest) or any(needs_cjk(ch) for ch in dest)
+    if not wide:
+        im = render_segments([(dest, color)], 18, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold")
+        return im if im.width <= room else squeeze_w(im, room)
+    cands = [dest] + ([dest[:-1]] if dest.endswith("행") and len(dest) > 2 else [])
+    for row in ("sdest", "sdest2"):
+        for d in cands:
+            for gap in (None, 3, 2, 1):
+                t = _side_spaced(d, color, row, room, gap)
+                if t is not None:
+                    return t
+    t = _old_text(cands[-1], color, "sdest2", room)
+    _warn(dest, room / max(1, _old_text(cands[-1], color, "sdest2", 10 ** 4).width))
+    return t
+
+
+def _side_dest_fits(dest, room):
+    if not (has_hangul(dest) or any(needs_cjk(ch) for ch in dest)):
+        return render_segments([(dest, (255, 255, 255))], 18, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold").width <= room
+    cands = [dest] + ([dest[:-1]] if dest.endswith("행") and len(dest) > 2 else [])
+    return any(_side_spaced(d, (255, 255, 255), row, room, 1) is not None for row in ("sdest", "sdest2") for d in cands)
+
+
+def _side_sub(text, color, room):
+    """아랫줄 한 줄 (영문 · 중문 · 일문). 영문은 비례폭 굵은 글씨를 영상처럼 조금 좁혀 씀"""
+    if has_hangul(text):
+        return _old_text(text, color, "ssub", room)
+    if any(needs_cjk(ch) for ch in text):
+        return _old_text(text, color, "ssub1", room)
+    im = render_segments([(text, color)], 16, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold")
+    w = min(room, max(1, round(im.width * 0.84)))       # 영상: 'Busanjin Market' 111칸
+    return squeeze_w(im, w) if w < im.width else im
+
+
+def _side_chain(stops, color, arrow):
+    """경유지 ▶ 경유지 ▶ … 한 줄 (높이 16). ▶는 높이 11칸 · 폭 9칸, 앞뒤 5칸
+    (영상: 경유지 사이 17~20칸, 72.0→79.0초 동안 흐른 거리 약 230칸에 맞춤)"""
+    ims = [_old_text(s_, color, "ssub", 10 ** 4) for s_ in stops if s_]
+    if not ims:
+        return None
+    gap, tri_h, tri_w = 5, 11, 9
+    w = sum(i.width for i in ims) + (len(ims) - 1) * (tri_w + 2 * gap)
+    out = Image.new("RGBA", (w, 16), (0, 0, 0, 0))
+    x = 0
+    for k, im in enumerate(ims):
+        out.alpha_composite(im, (x, 16 - im.height))
+        x += im.width
+        if k < len(ims) - 1:
+            ImageDraw.Draw(out).polygon([(x + gap, 7 - tri_h // 2), (x + gap + tri_w - 1, 7), (x + gap, 7 + tri_h // 2)],
+                                        fill=arrow + (255,))
+            x += tri_w + 2 * gap
+    return out
+
+
+def tpl_busan_side(r, st):
+    """부산 신형 풀컬러 측면 LED 180×40 — 여러 장. 경유지는 흐르는 화면(info['scroll'])"""
+    num = str(r.get("no", "")).strip()
+    kind = (r.get("kind") or "").strip()
+    c = _new_colors(st)
+    pages = []
+    W, H = SIDE_W, SIDE_H
+
+    def new():
+        return Image.new("RGBA", (W, H), (0, 0, 0, 255))
+
+    def add(img, k, ms):
+        im = img.convert("RGB")
+        im.info["duration"] = ms
+        im.info["page_kind"] = k
+        im.info["trans"] = "cut"
+        pages.append(im)
+        return im
+
+    if num:                                          # 번호만 크게: 높이 40칸, 숫자 사이 9칸 (영상 99번)
+        gap = 9 if len(num) <= 2 else 5 if len(num) <= 3 else 3
+        n = _new_num_paint(num, c, kind, st, h=H, max_w=W - 4, gap=gap)
+        img = new()
+        img.alpha_composite(n, ((W - n.width) // 2, (H - n.height) // 2))
+        add(img, "big", 1000)
+    n_img = _new_num_paint(num, c, kind, st, h=38, max_w=72, gap=3, kx=0.8) if num else None   # 영상: '99' 0~41번째 칸
+    end_ko = (r.get("end_ko") or "").strip()
+    dest_ko = _dest(end_ko) if end_ko else _dest(r.get("end_en", ""), "en")
+    if n_img and dest_ko and not _side_dest_fits(dest_ko, W - 1 - (n_img.width + 5)):
+        n_img = None                                 # 행선지가 길면 그 화면들은 번호 없이 판 전체 폭으로 (번호는 첫 화면에 크게)
+        if dest_ko.endswith("행") and len(dest_ko) > 2:
+            dest_ko = dest_ko[:-1]                   # 긴 행선지는 '행'을 뺀 채로 (번호를 빼도 '행'이 다시 붙지 않게)
+    x0 = (n_img.width + 5) if n_img else 2
+    room = W - 1 - x0 - (0 if n_img else 1)
+
+    def with_num():
+        img = new()
+        if n_img:
+            img.alpha_composite(n_img, (0, (H - n_img.height) // 2))
+        return img
+
+    def put_top(img, t):                              # 윗줄: 영상에서 글자가 2~21번째 줄
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, max(0, (21 - t.height) // 2) + 2))
+
+    ko_lines, _en_lines = parse_via(r.get("via", ""))
+    ko = _flat_stops(ko_lines)
+    if end_ko:
+        t = _side_dest(dest_ko, c["top"], room)
+        img = with_num()                              # 번호 + 'OO행' (세로 가운데)
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, (H - t.height) // 2))
+        add(img, "route", 1000)
+        end_en = (r.get("end_en") or "").strip() or romanize_name(end_ko)
+        end_zh = (r.get("end_zh") or "").strip() or translate_place(end_ko, "zh")
+        end_ja = (r.get("end_ja") or "").strip() or translate_place(end_ko, "ja")
+        if not end_zh:
+            WARN.append((f"중문 행선지를 몰라서 생략: {end_ko} → 종점(중) 칸에 적거나 번역 사전에 추가하세요", 0))
+        shown = set()
+        for sub in (end_en, end_zh, end_ja):          # 영상 순서: 영어 → 중국어(简) → 일본어
+            if sub and sub not in shown:
+                shown.add(sub)
+                img = with_num()
+                put_top(img, t)
+                s_ = _side_sub(sub, c["top"], room)
+                img.alpha_composite(s_, (x0 + (room - s_.width) // 2, H - 1 - s_.height))
+                add(img, "route", 1000)
+        chain = _side_chain(ko, c["via"], NEW_VIA_ARROW) if (ko and st.get("new_via") != "끔") else None
+        if chain is not None:
+            img = with_num()
+            put_top(img, t)
+            y = H - 1 - chain.height
+            if chain.width <= room:                   # 짧으면 흐르지 않고 가운데
+                img.alpha_composite(chain, (x0 + (room - chain.width) // 2, y))
+                add(img, "via", 2500)
+            else:                                     # 길면 처음엔 왼쪽 맞춤 → 왼쪽으로 흐름 → 끝에서 멈춤
+                win = img.copy()
+                win.alpha_composite(chain.crop((0, 0, room, chain.height)), (x0, y))
+                sc = dict(SIDE_SCROLL)
+                travel = chain.width - room
+                ms = sc["hold0"] + round(travel / sc["speed"] * 1000) + sc["hold1"]
+                im = add(win, "scroll", ms)
+                im.info["scroll"] = {"base": img.convert("RGB"), "strip": chain, "x": x0, "y": y, "w": room, **sc}
+    elif r.get("end_en"):
+        t = _side_dest(_dest(r["end_en"], "en"), c["top"], room)
+        img = with_num()
+        img.alpha_composite(t, (x0 + (room - t.width) // 2, (H - t.height) // 2))
+        add(img, "route", 1000)
+    seats = seats_text(r)
+    if seats:
+        add(seats_page(seats, NEW_TEXT, NEW_NUM_WHITE, w=W, h=H), "seats", 2000)
+    logo = (r.get("logo") or "").strip()
+    if logo:
+        lp = Path(logo).expanduser()
+        if lp.exists():
+            add(logo_to_led(lp, W, H, full=True), "logo", 2000)
+        else:
+            WARN.append((f"로고 파일 없음: {logo}", 0))
+    if r.get("slogan", "").strip():                  # 'Busan is good' : 분홍, 판 폭 가득
+        s_ = r["slogan"].strip()
+        t = None
+        for sz in (30, 28, 26, 24, 22, 20, 18):
+            t = render_segments([(s_, NEW_PINK)], sz, 10 ** 4, font_path=str(LATIN_BOLD), stroke="bold")
+            if t.width <= W - 7:
+                break
+        if t.width > W - 7:
+            t = squeeze_w(t, W - 7)
+        t = _thick_v(t)                               # 영상: 문구 세로획이 굵음
+        img = new()
+        img.alpha_composite(t, ((W - t.width) // 2, (H - t.height) // 2))
+        add(img, "slogan", 3000)
+    return pages
+
+
+def scroll_frames(page, ms_step=None):
+    """흐르는 화면 → [(이미지, ms)]. 처음 멈춤 → step칸씩 왼쪽으로 → 끝 멈춤"""
+    sc = page.info.get("scroll")
+    if not sc:
+        return [(page, page_duration(page))]
+    base, strip, x0, y, w = sc["base"], sc["strip"], sc["x"], sc["y"], sc["w"]
+    step = max(1, int(sc.get("step", 2)))
+    ms = ms_step or max(20, round(step / sc["speed"] * 1000))
+    travel = max(0, strip.width - w)
+    out = [(page, sc["hold0"])]
+    offs = list(range(step, travel, step)) + [travel]
+    for k, off in enumerate(offs):
+        f = base.convert("RGBA")
+        f.alpha_composite(strip.crop((off, 0, off + w, strip.height)), (x0, y))
+        out.append((f.convert("RGB"), sc["hold1"] if k == len(offs) - 1 else ms))
+    return out
+
+
 # ───────────────────────── 풀컬러 방향 표시 (192×32) ─────────────────────────
 # 사용자가 보내 준 풀컬러 LED 행선판 사진들(148-1 부산대학교 방향, 864 인경리–청주의료원, 31 의정부역 방향 등)의 배치.
 #  [번호 + 행선지 + (방 향)]  →  [번호 + 기점 – 종점]  →  [번호 + 영문 기점 – 종점]  →  [번호만 크게]
@@ -1995,6 +2233,7 @@ TEMPLATES = {
     "busan_old_192x32 (부산 구형 3색)": tpl_busan_old,
     "busan_new_192x32 (부산 신형 풀컬러)": tpl_busan_new,
     "fullcolor_dir_192x32 (풀컬러 방향)": tpl_fullcolor_dir,
+    "busan_side_180x40 (부산 신형 측면)": tpl_busan_side,
 }
 
 
@@ -2678,8 +2917,12 @@ def page_duration(img, default=1000):
 
 def anim_frames(pages, scroll_steps=6, band=18, step_ms=50):
     """페이지 → 재생 프레임 [(이미지, ms)].
-    부산 구형·신형 모두 넘김 효과 없이(PPT 전환 없음처럼) 바로 다음 화면으로 바뀜."""
-    return [(p, page_duration(p)) for p in pages]
+    부산 구형·신형 모두 넘김 효과 없이(PPT 전환 없음처럼) 바로 다음 화면으로 바뀜.
+    부산 신형 측면의 경유지 화면(info['scroll'])만 글자가 왼쪽으로 흐름."""
+    out = []
+    for p in pages:
+        out += scroll_frames(p)
+    return out
 
 
 def gif_frames(pages, z=4, led=True, scroll_steps=6):
@@ -2741,6 +2984,11 @@ SAMPLE_ROUTES = [
      "busan_new_192x32 (부산 신형 풀컬러)", "일반",
      "부산 신형 풀컬러 LED: 큰 번호 → 번호 + 'OO행' → 'O O 행' + 영문 → 작은 경유지 → 문구(분홍)",
      {"slogan": "Busan is good"}),
+    ("99", "남포동", "부산진시장", "Nampo-dong", "Busanjin Market",
+     "금사시장,안락교차로,연산교차로,시청,서면",
+     "busan_side_180x40 (부산 신형 측면)", "일반",
+     "부산 신형 측면 180×40: 큰 번호 → 번호+'OO행' → +영문·중문·일문 → 경유지가 왼쪽으로 흐름([▶ 재생]·GIF에서 보임) → 문구",
+     {"slogan": "Busan is good"}),
     ("2029", "녹산", "해운대", "Noksan", "Haeundae",
      "명지,하단,괴정,서면,센텀시티\nMyeongji,Hadan,Goejeong,Seomyeon,Centum City",
      "busan_new_192x32 (부산 신형 풀컬러)", "급행",
@@ -2794,7 +3042,7 @@ def make_sample_excel(path):
         ["· 번호: 행선판에 나올 노선 번호 (숫자·하이픈은 원본형 번호 글꼴, 한글이 섞이면 일반 글꼴)"],
         ["· 기점/종점(한·영): 공백이 있으면 두 줄로 나뉘고, 짧으면 한 줄로 크게 나옵니다."],
         ["· 경유지: 쉼표 = 정류장, 줄바꿈(Alt+Enter / 맥은 ⌃⌥Enter) = 줄. 한글 줄 다음에 영문 줄."],
-        ["· 템플릿: jinmyeong_front_192x160 / busan_old_192x32 (부산 구형 3색) / busan_new_192x32 (부산 신형 풀컬러) / fullcolor_dir_192x32 (풀컬러 방향) / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
+        ["· 템플릿: jinmyeong_front_192x160 / busan_old_192x32 (부산 구형 3색) / busan_new_192x32 (부산 신형 풀컬러) / fullcolor_dir_192x32 (풀컬러 방향) / busan_side_180x40 (부산 신형 측면) / side_160x32 (측면, 한/영 2장) / front_192x32 (전면 한 줄, 한/영 2장) / rear_64x32 (후면 번호)"],
         ["· 구분: 일반 / 급행 / 좌석 / 심야 / 마을 / 순환 (색·반전은 프로그램의 스타일 탭에서 바꿈)"],
         ["· 기점/종점(일·중), 문구, 로고 이미지: 부산 구형 3색 템플릿(busan_old_192x32)의 행선 화면·문구 화면·로고 화면에 쓰임 (비워 두면 그 화면은 생략)"],
         ["· 로고 이미지: PNG·BMP·JPG 파일 경로. 판 크기에 맞춰 줄여 넣습니다(구형은 빨강·초록·주황 3색으로 바꿈)."],
@@ -3426,7 +3674,7 @@ def run_gui():
     strip.pack(fill="x")
     strip_sb.pack(fill="x")
     PAGE_KIND_LABEL = {"big": "큰 번호", "route": "행선", "via": "경유지", "seats": "잔여좌석", "slogan": "문구",
-                       "logo": "로고"}
+                       "logo": "로고", "scroll": "경유지 흐름"}
     S["strip_key"], S["thumbs"], S["thumb_boxes"] = None, [], []
 
     def draw_strip():
@@ -4521,9 +4769,12 @@ SELFTEST_ROUTES = [
      "slogan": "Busan is good", "template": "busan_new_192x32 (부산 신형 풀컬러)"},
     {"no": "148-1", "start_ko": "학장동", "end_ko": "부산대학교", "seats": "12",
      "template": "fullcolor_dir_192x32 (풀컬러 방향)"},
+    {"no": "86", "start_ko": "연산9동", "end_ko": "충무동", "start_en": "Yeonsan 9-dong", "end_en": "Chungmu-dong",
+     "via": "연산역,부산시청,양정역,서면역,범내골역,국제시장,남포동", "seats": "17", "slogan": "Busan is good",
+     "template": "busan_side_180x40 (부산 신형 측면)"},
 ]
 SELFTEST_STYLES = [{}, {"num_weight": "균일 2픽셀", "arrow_shape": "→"}, {"num_weight": "균일 3픽셀"}]
-SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '37#0': '95a7f5d972e3aead', '99#0': 'ecea271bbd92a6b4', '2029#0': '01386d76aaf6f832', '148-1#0': 'bd0e0213f905332c', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '37#1': '95a7f5d972e3aead', '99#1': 'ecea271bbd92a6b4', '2029#1': '01386d76aaf6f832', '148-1#1': 'bd0e0213f905332c', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff', '37#2': '95a7f5d972e3aead', '99#2': 'ecea271bbd92a6b4', '2029#2': '01386d76aaf6f832', '148-1#2': 'bd0e0213f905332c'}  # 검증 완료된 기준 이미지 해시
+SELFTEST_EXPECTED = {'360#0': '4dd240bfda9c43c2', '1100#0': 'a103fbb8f3c73b85', '58-1#0': '1bcf005ba43f14e2', '7-12#0': '44a7a4a1346c97ff', '37#0': '95a7f5d972e3aead', '99#0': 'ecea271bbd92a6b4', '2029#0': '01386d76aaf6f832', '148-1#0': 'bd0e0213f905332c', '360#1': 'a30ee2e589538682', '1100#1': 'c0e38276c8232e1b', '58-1#1': '87bafe9b72384f83', '7-12#1': '5fe5c322428ba176', '37#1': '95a7f5d972e3aead', '99#1': 'ecea271bbd92a6b4', '2029#1': '01386d76aaf6f832', '148-1#1': 'bd0e0213f905332c', '360#2': '15b0ac3bfbf10f6f', '1100#2': '50735154bb7b0e58', '58-1#2': '79e4b8cf9575fe6a', '7-12#2': '44a7a4a1346c97ff', '37#2': '95a7f5d972e3aead', '99#2': 'ecea271bbd92a6b4', '2029#2': '01386d76aaf6f832', '148-1#2': 'bd0e0213f905332c', '86#0': '5ef92621593423fa', '86#1': '5ef92621593423fa', '86#2': '5ef92621593423fa'}  # 검증 완료된 기준 이미지 해시
 
 
 def selftest_hashes():
